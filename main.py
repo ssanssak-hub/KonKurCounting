@@ -1,48 +1,33 @@
-#!/usr/bin/env python3
-# coding: utf-8
-"""
-ربات تلگرامی روزشمار کنکور
-"""
-
 import os
-import json
-import datetime
 import logging
-from typing import Optional
-
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-except ImportError:
-    ZoneInfo = None
-
-import jdatetime
-import requests
 from flask import Flask, request, jsonify
+import requests
+import jdatetime
+from dotenv import load_dotenv
 
-# Load .env file if available
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-logging.basicConfig(level=logging.INFO)
+# ---------------------------
+# تنظیمات لاگ
+# ---------------------------
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-# --- Config ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PUBLIC_URL = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+# ---------------------------
+# بارگذاری متغیرها
+# ---------------------------
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", BOT_TOKEN)
+PUBLIC_URL = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
 
 if not BOT_TOKEN:
-    raise RuntimeError("❌ BOT_TOKEN environment variable is missing!")
+    raise ValueError("❌ BOT_TOKEN در محیط تنظیم نشده!")
 
-WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}" if WEBHOOK_SECRET else f"/webhook/{BOT_TOKEN}"
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-app = Flask(__name__)
-
-# --- Exam dates (Jalali calendar) ---
+# ---------------------------
+# داده‌های کنکور
+# ---------------------------
 EXAMS = {
     "تجربی": jdatetime.date(1405, 4, 12),
     "هنر": jdatetime.date(1405, 4, 12),
@@ -50,92 +35,57 @@ EXAMS = {
     "انسانی": jdatetime.date(1405, 4, 11),
 }
 
-ALIASES = {
-    "tajrobi": "تجربی",
-    "honar": "هنر",
-    "riazi": "ریاضی",
-    "ensani": "انسانی",
-}
+# ---------------------------
+# اپ Flask
+# ---------------------------
+app = Flask(__name__)
+app.logger.setLevel(logging.DEBUG)
 
+@app.errorhandler(Exception)
+def handle_error(e):
+    logger.exception("❌ Unhandled Exception")
+    return jsonify({"ok": False, "error": str(e)}), 500
 
-# --- Helpers ---
-def to_gregorian(jdate: jdatetime.date) -> datetime.date:
-    return jdate.togregorian().date()
+# ---------------------------
+# توابع ربات
+# ---------------------------
+def send_message(chat_id: int, text: str, with_keyboard: bool = False) -> None:
+    """ارسال پیام به کاربر"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
 
-def today_date() -> datetime.date:
-    if ZoneInfo:
-        try:
-            return datetime.datetime.now(tz=ZoneInfo("Asia/Tehran")).date()
-        except Exception:
-            pass
-    return datetime.datetime.utcnow().date()
-
-def days_until(jdate: jdatetime.date) -> int:
-    target = to_gregorian(jdate)
-    return (target - today_date()).days
-
-def build_keyboard() -> dict:
-    return {
-        "keyboard": [
-            [{"text": "تجربی"}, {"text": "ریاضی"}],
-            [{"text": "انسانی"}, {"text": "هنر"}],
-        ],
-        "resize_keyboard": True,
-    }
-
-def send_message(chat_id: int, text: str, with_keyboard=False) -> None:
-    """ارسال پیام به تلگرام"""
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if with_keyboard:
-        payload["reply_markup"] = json.dumps(build_keyboard(), ensure_ascii=False)
+        payload["reply_markup"] = {
+            "keyboard": [[{"text": k}] for k in EXAMS.keys()],
+            "resize_keyboard": True,
+            "one_time_keyboard": False,
+        }
 
     try:
-        resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
-        logger.info(f"📤 پیام به {chat_id}: {text[:50]}... | status={resp.status_code}")
-        logger.debug(f"📤 payload: {payload}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ خطا در ارسال پیام: {e}")
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
+        logger.info(f"📤 پیام به {chat_id} ارسال شد: {text}")
+    except Exception as e:
+        logger.error(f"❌ خطا در ارسال پیام به {chat_id}: {e}")
 
-def resolve_exam_name(text: str) -> Optional[str]:
-    t = text.strip().lower()
-    logger.debug(f"🔍 ورودی resolve_exam_name: {repr(text)} → {repr(t)}")
-    if t in EXAMS:
-        return t
-    if t in ALIASES:
-        return ALIASES[t]
-    return None
+def get_countdown_message(exam_name: str) -> str:
+    today = jdatetime.date.today()
+    exam_date = EXAMS.get(exam_name)
+    if not exam_date:
+        return "❓ رشته نامعتبر است."
 
-def get_countdown_message(exam: str) -> str:
-    exam_date = EXAMS[exam]
-    days = days_until(exam_date)
-    gregorian = to_gregorian(exam_date)
-
-    if days > 1:
-        return f"تا کنکور رشته «{exam}» {days} روز مانده.\n📅 تاریخ: {exam_date} ({gregorian})"
-    elif days == 1:
-        return f"فردا کنکور رشته «{exam}» است! ⏳"
-    elif days == 0:
-        return f"امروز روز کنکور رشته «{exam}» است! موفق باشید! 🎯"
+    delta = exam_date - today
+    if delta.days < 0:
+        return f"✅ آزمون {exam_name} در تاریخ {exam_date} برگزار شده است!"
     else:
-        return f"کنکور رشته «{exam}» گذشته است. 📅 تاریخ: {exam_date} ({gregorian})"
+        return f"⏳ تا آزمون {exam_name} در تاریخ {exam_date}، {delta.days} روز باقی مانده است."
 
-
-# --- Flask Routes ---
-@app.route(WEBHOOK_PATH, methods=["POST"])
-def webhook() -> str:
-    update = request.get_json(force=True, silent=True)
-    logger.info(f"📨 آپدیت دریافتی: {json.dumps(update, ensure_ascii=False)}")
-
-    if not update:
-        return jsonify({"ok": False, "error": "Invalid update"}), 400
-
-    message = update.get("message") or update.get("edited_message")
-    if message:
-        chat_id = message["chat"]["id"]
-        text = message.get("text") or ""
-        handle_message(chat_id, text)
-
-    return "OK"
+def resolve_exam_name(text: str) -> str | None:
+    text = text.strip()
+    for key in EXAMS.keys():
+        if key in text:
+            return key
+    return None
 
 def handle_message(chat_id: int, text: str) -> None:
     logger.info(f"📩 پیام از {chat_id}: {repr(text)}")
@@ -155,31 +105,49 @@ def handle_message(chat_id: int, text: str) -> None:
         logger.warning(f"⚠️ رشته ناشناخته: {text}")
         send_message(chat_id, "❓ رشته شناخته نشد. لطفاً یکی از گزینه‌های منو رو انتخاب کنید.", with_keyboard=True)
 
+# ---------------------------
+# مسیرهای Flask
+# ---------------------------
+@app.route("/", methods=["GET"])
+def index():
+    return "ربات شمارش معکوس کنکور فعال است ✅"
 
-@app.route("/set_webhook", methods=["GET"])
-def set_webhook() -> str:
-    if not PUBLIC_URL:
-        return jsonify({"ok": False, "error": "PUBLIC_URL not set"}), 400
-
-    webhook_url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
+@app.route(f"/webhook/{WEBHOOK_SECRET}", methods=["POST"])
+def webhook():
     try:
-        resp = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-        result = resp.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Failed to set webhook: {e}")
-        result = {"ok": False, "error": str(e)}
+        data = request.get_json(force=True)
+        logger.info(f"📥 آپدیت از تلگرام: {data}")
 
-    return jsonify({"setWebhook": webhook_url, "result": result})
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
+            handle_message(chat_id, text)
 
+    except Exception as e:
+        logger.exception("❌ خطا در پردازش آپدیت تلگرام")
+        return jsonify({"ok": False}), 500
 
-# --- Run ---
+    return jsonify({"ok": True})
+
+# ---------------------------
+# تنظیم وبهوک
+# ---------------------------
+@app.route("/set_webhook", methods=["GET"])
+def set_webhook():
+    if not PUBLIC_URL:
+        return "❌ PUBLIC_URL یا RENDER_EXTERNAL_URL تنظیم نشده", 500
+
+    url = f"{PUBLIC_URL}/webhook/{WEBHOOK_SECRET}"
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+    r = requests.post(api_url, json={"url": url})
+
+    if r.status_code == 200:
+        return f"✅ وبهوک تنظیم شد: {url}"
+    else:
+        return f"❌ خطا در تنظیم وبهوک: {r.text}", 500
+
+# ---------------------------
+# اجرای لوکال
+# ---------------------------
 if __name__ == "__main__":
-    if PUBLIC_URL:
-        try:
-            webhook_url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
-            resp = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-            logger.info(f"✅ Webhook set to {webhook_url} | {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"⚠️ Webhook set failed: {e}")
-
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=5000, debug=True)
