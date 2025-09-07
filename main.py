@@ -91,12 +91,14 @@ def send_message(chat_id: int, text: str, with_keyboard=False) -> None:
 
     try:
         resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
-        logger.info(f"📤 پیام به {chat_id}: {text[:40]}... | status={resp.status_code}")
+        logger.info(f"📤 پیام به {chat_id}: {text[:50]}... | status={resp.status_code}")
+        logger.debug(f"📤 payload: {payload}")
     except requests.exceptions.RequestException as e:
         logger.error(f"❌ خطا در ارسال پیام: {e}")
 
 def resolve_exam_name(text: str) -> Optional[str]:
     t = text.strip().lower()
+    logger.debug(f"🔍 ورودی resolve_exam_name: {repr(text)} → {repr(t)}")
     if t in EXAMS:
         return t
     if t in ALIASES:
@@ -122,6 +124,8 @@ def get_countdown_message(exam: str) -> str:
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook() -> str:
     update = request.get_json(force=True, silent=True)
+    logger.info(f"📨 آپدیت دریافتی: {json.dumps(update, ensure_ascii=False)}")
+
     if not update:
         return jsonify({"ok": False, "error": "Invalid update"}), 400
 
@@ -134,16 +138,21 @@ def webhook() -> str:
     return "OK"
 
 def handle_message(chat_id: int, text: str) -> None:
-    logger.info(f"📩 پیام از {chat_id}: {text}")
+    logger.info(f"📩 پیام از {chat_id}: {repr(text)}")
 
     if text.startswith("/start") or "منو" in text:
         send_message(chat_id, "سلام! یکی از گزینه‌های زیر رو انتخاب کن:", with_keyboard=True)
         return
 
     exam_key = resolve_exam_name(text)
+    logger.info(f"🔍 نتیجه resolve_exam_name: {exam_key}")
+
     if exam_key:
-        send_message(chat_id, get_countdown_message(exam_key))
+        response = get_countdown_message(exam_key)
+        logger.info(f"✅ پاسخ تولید شد: {response}")
+        send_message(chat_id, response)
     else:
+        logger.warning(f"⚠️ رشته ناشناخته: {text}")
         send_message(chat_id, "❓ رشته شناخته نشد. لطفاً یکی از گزینه‌های منو رو انتخاب کنید.", with_keyboard=True)
 
 
