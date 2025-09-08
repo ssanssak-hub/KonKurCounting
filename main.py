@@ -39,6 +39,8 @@ EXAMS = {
     "ریاضی": (jdatetime.datetime(1405, 4, 11, 8, 0), "📐"),
     "انسانی": (jdatetime.datetime(1405, 4, 11, 8, 0), "📚"),
     "هنر": (jdatetime.datetime(1405, 4, 12, 14, 30), "🎨"),
+    "فرهنگیان - روز اول": (jdatetime.datetime(1405, 2, 17, 8, 0), "🏫"),
+    "فرهنگیان - روز دوم": (jdatetime.datetime(1405, 2, 18, 8, 0), "🏫"),
 }
 
 ALIASES = {
@@ -46,6 +48,8 @@ ALIASES = {
     "riazi": "ریاضی",
     "ensani": "انسانی",
     "honar": "هنر",
+    "farhangian": "فرهنگیان - روز اول",
+    "farhangian2": "فرهنگیان - روز دوم",
 }
 
 # ---------------- Helpers ----------------
@@ -84,6 +88,7 @@ def build_keyboard() -> dict:
     keyboard = [
         [{"text": "🧪 تجربی"}, {"text": "📐 ریاضی"}],
         [{"text": "📚 انسانی"}, {"text": "🎨 هنر"}],
+        [{"text": "🏫 فرهنگیان - روز اول"}, {"text": "🏫 فرهنگیان - روز دوم"}],
         [{"text": "🏠 بازگشت به منو"}],
     ]
     return {"keyboard": keyboard, "resize_keyboard": True}
@@ -99,7 +104,9 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None) -
         logger.error(f"SendMessage error: {e}")
 
 def resolve_exam(text: str) -> Optional[str]:
-    t = text.strip().lower().replace("🧪","").replace("📐","").replace("📚","").replace("🎨","").strip()
+    t = text.strip().lower()
+    for symbol in ["🧪","📐","📚","🎨","🏫"]:
+        t = t.replace(symbol, "").strip()
     if t in EXAMS:
         return t
     if t in ALIASES:
