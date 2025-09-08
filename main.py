@@ -4,7 +4,8 @@ import logging
 from flask import Flask, request
 import requests
 import jdatetime
-from datetime import datetime, timezone
+import sqlite3
+from datetime import datetime, timezone, timedelta
 
 # ----------------- تنظیمات -----------------
 TOKEN = os.getenv("BOT_TOKEN")
@@ -12,28 +13,64 @@ if not TOKEN:
     raise ValueError("❌ BOT_TOKEN در متغیرهای محیطی تنظیم نشده!")
 
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
-
-# استفاده از لینک رندر
 PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_URL")
-if not PUBLIC_URL:
-    raise ValueError("❌ PUBLIC_URL یا RENDER_EXTERNAL_URL تعریف نشده!")
-
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", TOKEN)
 WEBHOOK_URL = f"{PUBLIC_URL}/webhook/{WEBHOOK_SECRET}"
 
-# ----------------- لاگ -----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----------------- لیست آزمون‌ها -----------------
-EXAMS = {
-    "تجربی": (jdatetime.datetime(1405, 4, 12, 8, 0), "🧪"),
-    "ریاضی": (jdatetime.datetime(1405, 4, 11, 8, 0), "📐"),
-    "انسانی": (jdatetime.datetime(1405, 4, 11, 8, 0), "📚"),
-    "هنر": (jdatetime.datetime(1405, 4, 12, 14, 30), "🎨"),
-    "فرهنگیان - روز اول": (jdatetime.datetime(1405, 2, 17, 8, 0), "🏫"),
-    "فرهنگیان - روز دوم": (jdatetime.datetime(1405, 2, 18, 8, 0), "🏫"),
-}
+# ----------------- دیتابیس -----------------
+DB_FILE = "study.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS study_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            subject TEXT,
+            start_time TEXT,
+            duration REAL,
+            date TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def add_study(user_id, subject, start_time, duration):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO study_log (user_id, subject, start_time, duration, date) VALUES (?, ?, ?, ?, ?)",
+                (user_id, subject, start_time, duration, datetime.utcnow().date().isoformat()))
+    conn.commit()
+    conn.close()
+
+def get_study_summary(user_id, days=1):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    start_date = (datetime.utcnow().date() - timedelta(days=days-1)).isoformat()
+    cur.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date >= ?", (user_id, start_date))
+    result = cur.fetchone()[0]
+    conn.close()
+    return result or 0
+
+def get_weekly_comparison(user_id):
+    today = datetime.utcnow().date()
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+
+    cur.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date BETWEEN ? AND ?",
+                (user_id, (today - timedelta(days=6)).isoformat(), today.isoformat()))
+    this_week = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date BETWEEN ? AND ?",
+                (user_id, (today - timedelta(days=13)).isoformat(), (today - timedelta(days=7)).isoformat()))
+    last_week = cur.fetchone()[0] or 0
+
+    conn.close()
+    return this_week, last_week
 
 # ----------------- جملات انگیزشی -----------------
 QUOTES = [
@@ -48,89 +85,77 @@ QUOTES = [
 def get_random_quote():
     return random.choice(QUOTES)
 
-# ----------------- توابع ربات -----------------
-def build_keyboard() -> dict:
-    keyboard = [
-        [{"text": "🧪 تجربی"}, {"text": "📐 ریاضی"}],
-        [{"text": "📚 انسانی"}, {"text": "🎨 هنر"}],
-        [{"text": "🏫 فرهنگیان - روز اول"}, {"text": "🏫 فرهنگیان - روز دوم"}],
-        [{"text": "🏠 بازگشت به منو"}],
-    ]
-    return {"keyboard": keyboard, "resize_keyboard": True}
-
-def countdown_text(exam: str, exam_date: jdatetime.datetime, emoji: str) -> str:
-    now = datetime.now(timezone.utc)
-    exam_dt = exam_date.togregorian().replace(tzinfo=timezone.utc)
-    delta = exam_dt - now
-
-    if delta.total_seconds() <= 0:
-        return f"{emoji} کنکور «{exam}» برگزار شده است! ✅"
-
-    days, remainder = divmod(int(delta.total_seconds()), 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, _ = divmod(remainder, 60)
-
-    date_str = exam_date.strftime("%A %d %B %Y - %H:%M")
-    quote = get_random_quote()
-
-    return (
-        f"{emoji} شمارش معکوس کنکور «{exam}»\n"
-        f"⏳ {days} روز، {hours} ساعت و {minutes} دقیقه مونده!\n"
-        f"🗓 تاریخ برگزاری: {date_str}\n\n"
-        f"💡 جمله انگیزشی: {quote}"
-    )
-
+# ----------------- ربات -----------------
 def send_message(chat_id: int, text: str, reply_markup=None):
     url = f"{BASE_URL}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "reply_markup": reply_markup,
-    }
+    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
     r = requests.post(url, json=payload)
     if not r.ok:
-        logger.error(f"ارسال پیام ناموفق بود: {r.text}")
+        logger.error(f"❌ ارسال پیام ناموفق: {r.text}")
+
+def build_keyboard():
+    return {
+        "keyboard": [
+            [{"text": "📊 گزارش مطالعه"}],
+            [{"text": "🏠 بازگشت به منو"}],
+        ],
+        "resize_keyboard": True
+    }
 
 # ----------------- Flask -----------------
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "ربات شمارش معکوس کنکور فعال است ✅"
+    return "ربات شمارش معکوس + مدیریت مطالعه فعال است ✅"
 
 @app.route(f"/webhook/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook():
-    try:
-        data = request.get_json()
-        logger.info(f"آپدیت جدید: {data}")
+    data = request.get_json()
+    logger.info(f"آپدیت: {data}")
 
-        if "message" in data:
-            chat_id = data["message"]["chat"]["id"]
-            text = data["message"].get("text", "")
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
 
-            if text in ["start", "/start", "🏠 بازگشت به منو"]:
-                send_message(chat_id, "📋 یکی از آزمون‌ها رو انتخاب کن:", build_keyboard())
-            else:
-                exam_name = text.replace("🧪 ", "").replace("📐 ", "").replace("📚 ", "").replace("🎨 ", "").replace("🏫 ", "")
-                if exam_name in EXAMS:
-                    exam_date, emoji = EXAMS[exam_name]
-                    msg = countdown_text(exam_name, exam_date, emoji)
-                    send_message(chat_id, msg, build_keyboard())
-                else:
-                    send_message(chat_id, "❌ آزمون نامعتبر. لطفاً از منو انتخاب کنید.", build_keyboard())
+        if text.startswith("/add"):
+            try:
+                _, subject, start, duration = text.split(maxsplit=3)
+                add_study(chat_id, subject, start, float(duration))
+                send_message(chat_id, f"✅ مطالعه {subject} به مدت {duration} ساعت ثبت شد.", build_keyboard())
+            except Exception as e:
+                send_message(chat_id, "❌ فرمت درست: /add <درس> <ساعت شروع> <مدت ساعت>", build_keyboard())
 
-        return {"ok": True}
-    except Exception as e:
-        logger.error(f"❌ خطا در پردازش وبهوک: {e}", exc_info=True)
-        return {"ok": False}, 500
+        elif text.startswith("/today"):
+            total = get_study_summary(chat_id, 1)
+            send_message(chat_id, f"📚 امروز {total:.1f} ساعت درس خوندی.", build_keyboard())
+
+        elif text.startswith("/week") or text == "📊 گزارش مطالعه":
+            this_week, last_week = get_weekly_comparison(chat_id)
+            diff = this_week - last_week
+            trend = "📈 پیشرفت" if diff > 0 else ("📉 پسرفت" if diff < 0 else "➡️ بدون تغییر")
+            send_message(chat_id,
+                         f"📊 گزارش مطالعه هفتگی:\n"
+                         f"این هفته: {this_week:.1f} ساعت\n"
+                         f"هفته قبل: {last_week:.1f} ساعت\n"
+                         f"{trend}: {diff:.1f} ساعت",
+                         build_keyboard())
+
+        elif text in ["/start", "start", "🏠 بازگشت به منو"]:
+            send_message(chat_id, "👋 خوش اومدی!\nاز دستورات زیر استفاده کن:\n"
+                                  "/add <درس> <ساعت شروع> <مدت ساعت>\n"
+                                  "/today → مجموع امروز\n"
+                                  "/week → گزارش هفتگی", build_keyboard())
+
+    return {"ok": True}
 
 # ----------------- ست وبهوک -----------------
 def set_webhook():
     url = f"{BASE_URL}/setWebhook"
-    payload = {"url": WEBHOOK_URL}
-    r = requests.post(url, json=payload)
+    r = requests.post(url, json={"url": WEBHOOK_URL})
     logger.info(f"تنظیم وبهوک: {r.text}")
 
 if __name__ == "__main__":
+    init_db()
     set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
