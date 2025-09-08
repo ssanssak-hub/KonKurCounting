@@ -1,220 +1,192 @@
-#!/usr/bin/env python3
-# coding: utf-8
-
 import os
 import json
-import datetime
-import logging
 import time
-from typing import Optional
-
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-except ImportError:
-    ZoneInfo = None
-
+import logging
 import jdatetime
 import requests
-from flask import Flask, request, jsonify
+from datetime import datetime, timezone
+from flask import Flask, request
+from dotenv import load_dotenv
 
-# Load .env if available
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+# Load .env
+load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN not set in environment")
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PUBLIC_URL = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN environment variable is missing.")
-
-WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}" if WEBHOOK_SECRET else f"/webhook/{BOT_TOKEN}"
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
+# Flask app
 app = Flask(__name__)
 
-# --- Exam dates with exact times ---
+# Logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
+# کنکورها
 EXAMS = {
-    "تجربی": (jdatetime.datetime(1405, 4, 12, 8, 0), "08:00 صبح"),
-    "هنر": (jdatetime.datetime(1405, 4, 12, 14, 30), "14:30 بعدازظهر"),
-    "ریاضی": (jdatetime.datetime(1405, 4, 11, 8, 0), "08:00 صبح"),
-    "انسانی": (jdatetime.datetime(1405, 4, 11, 8, 0), "08:00 صبح"),
-    "فرهنگیان - روز اول": (jdatetime.datetime(1405, 2, 17, 8, 0), "08:00 صبح"),
-    "فرهنگیان - روز دوم": (jdatetime.datetime(1405, 2, 18, 8, 0), "08:00 صبح"),
+    "تجربی": {"date": jdatetime.datetime(1405, 4, 12, 8, 0), "time": "08:00 صبح"},
+    "ریاضی": {"date": jdatetime.datetime(1405, 4, 11, 8, 0), "time": "08:00 صبح"},
+    "انسانی": {"date": jdatetime.datetime(1405, 4, 11, 8, 0), "time": "08:00 صبح"},
+    "هنر": {"date": jdatetime.datetime(1405, 4, 12, 14, 30), "time": "14:30 عصر"},
+    "فرهنگیان": {"date": jdatetime.datetime(1405, 2, 17, 8, 0), "time": "08:00 صبح"},
 }
 
-ALIASES = {
-    "tajrobi": "تجربی",
-    "honar": "هنر",
-    "riazi": "ریاضی",
-    "ensani": "انسانی",
-    "farhangi": "فرهنگیان - روز اول",
-}
+# دیتابیس ساده در حافظه
+user_study = {}
 
-# --- Memory for study logs ---
-study_logs = {}  # {user_id: [(date, lesson, hours)]}
-
-def to_gregorian(jdt: jdatetime.datetime) -> datetime.datetime:
-    return jdt.togregorian()
-
-def now_tehran() -> datetime.datetime:
-    if ZoneInfo:
-        return datetime.datetime.now(ZoneInfo("Asia/Tehran"))
-    return datetime.datetime.utcnow()
-
-def countdown(target_jdt: jdatetime.datetime) -> (int, int, int):
-    """Return days, hours, minutes left."""
-    target = to_gregorian(target_jdt)
-    now = now_tehran().replace(tzinfo=None)
-    diff = target - now
-    if diff.total_seconds() < 0:
-        return -1, -1, -1
-    days = diff.days
-    hours, remainder = divmod(diff.seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    return days, hours, minutes
-
-def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None):
-    """Send a message with retry if rate-limited (429)."""
+# ارسال پیام
+def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
     try:
+        logger.info(f"➡️ Sending payload: {payload}")
         resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
-        if resp.status_code == 429:  # Too Many Requests
+
+        if resp.status_code == 429:
             data = resp.json()
             retry_after = data.get("parameters", {}).get("retry_after", 3)
-            logger.warning(f"Rate limit hit. Retrying after {retry_after} seconds...")
+            logger.warning(f"⏳ Rate limit hit. Retrying after {retry_after} sec...")
             time.sleep(retry_after)
             return send_message(chat_id, text, reply_markup)
+
+        if resp.status_code == 400:
+            logger.error(f"❌ Bad Request: {resp.text}")
+
         resp.raise_for_status()
     except Exception as e:
-        logger.error(f"send_message error: {e}")
+        logger.error(f"send_message error: {e}, response: {getattr(resp, 'text', '')}")
 
-def main_menu() -> dict:
-    keyboard = [
-        [{"text": "تجربی"}, {"text": "ریاضی"}],
-        [{"text": "انسانی"}, {"text": "هنر"}],
-        [{"text": "فرهنگیان - روز اول"}, {"text": "فرهنگیان - روز دوم"}],
-        [{"text": "📚 برنامه‌ریزی"}],
-    ]
-    return {"keyboard": keyboard, "resize_keyboard": True}
+# کیبورد اصلی
+def main_menu():
+    return {
+        "keyboard": [
+            [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنکور ریاضی"}],
+            [{"text": "📚 کنکور انسانی"}, {"text": "🎨 کنکور هنر"}],
+            [{"text": "🏫 کنکور فرهنگیان"}],
+            [{"text": "📖 برنامه‌ریزی"}],
+        ],
+        "resize_keyboard": True,
+    }
 
-def study_menu() -> dict:
-    keyboard = [
-        [{"text": "➕ ثبت مطالعه"}, {"text": "📊 مشاهده پیشرفت"}],
-        [{"text": "بازگشت ⬅️"}],
-    ]
-    return {"keyboard": keyboard, "resize_keyboard": True}
+# کیبورد برنامه‌ریزی
+def study_menu():
+    return {
+        "keyboard": [
+            [{"text": "➕ ثبت مطالعه"}, {"text": "📊 مشاهده پیشرفت"}],
+            [{"text": "⬅️ بازگشت"}],
+        ],
+        "resize_keyboard": True,
+    }
 
-@app.route(WEBHOOK_PATH, methods=["POST"])
-def webhook():
-    update = request.get_json(force=True, silent=True)
-    if not update:
-        return jsonify({"ok": False})
+# محاسبه تایمر
+def get_countdown(exam_name: str):
+    exam = EXAMS[exam_name]
+    now = datetime.now(timezone.utc)
+    exam_g = exam["date"].togregorian().replace(tzinfo=timezone.utc)
+    diff = exam_g - now
 
-    message = update.get("message")
-    if not message:
-        return "OK"
+    if diff.total_seconds() <= 0:
+        return f"✅ کنکور {exam_name} برگزار شده!"
 
-    chat_id = message["chat"]["id"]
-    text = message.get("text", "")
+    days, remainder = divmod(int(diff.total_seconds()), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
 
-    handle_message(chat_id, text)
-    return "OK"
+    return (
+        f"⏳ تا کنکور <b>{exam_name}</b>: "
+        f"{days} روز، {hours} ساعت و {minutes} دقیقه مونده\n"
+        f"🕗 ساعت شروع: {exam['time']}"
+    )
 
+# هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
-    user_id = chat_id
-    txt = text.strip()
+    if text in ["شروع", "/start"]:
+        send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
 
-    if txt in ["شروع", "/start"]:
-        send_message(chat_id,
-                     "سلام 👋\nمن ربات روزشمار کنکور هستم.\nیکی از گزینه‌ها رو انتخاب کن:",
-                     reply_markup=main_menu())
-        return
+    elif text == "📖 برنامه‌ریزی":
+        send_message(chat_id, "📖 بخش برنامه‌ریزی:", reply_markup=study_menu())
 
-    if txt == "📚 برنامه‌ریزی":
-        send_message(chat_id, "بخش برنامه‌ریزی 📚", reply_markup=study_menu())
-        return
+    elif text == "➕ ثبت مطالعه":
+        send_message(
+            chat_id,
+            "📚 لطفاً اطلاعات مطالعه را به این شکل وارد کنید:\n\n"
+            "نام درس، ساعت شروع (hh:mm)، ساعت پایان (hh:mm)، مدت (ساعت)\n\n"
+            "مثال:\nریاضی، 14:00، 16:00، 2"
+        )
 
-    if txt == "بازگشت ⬅️":
-        send_message(chat_id, "منو اصلی:", reply_markup=main_menu())
-        return
-
-    # Study features
-    if txt.startswith("➕ ثبت مطالعه"):
-        send_message(chat_id, "لطفاً به فرمت زیر بفرست:\n<نام درس> <ساعت مطالعه>\nمثال: ریاضی 2.5")
-        return
-
-    if " " in txt:
-        parts = txt.split()
-        if len(parts) == 2:
-            lesson, hours_str = parts
-            try:
-                hours = float(hours_str)
-                today = now_tehran().date()
-                study_logs.setdefault(user_id, []).append((today, lesson, hours))
-                send_message(chat_id, f"✅ ثبت شد: {lesson} - {hours} ساعت")
-                return
-            except ValueError:
-                pass
-
-    if txt == "📊 مشاهده پیشرفت":
-        logs = study_logs.get(user_id, [])
+    elif text == "📊 مشاهده پیشرفت":
+        logs = user_study.get(chat_id, [])
         if not logs:
-            send_message(chat_id, "هنوز مطالعه‌ای ثبت نکردی.")
-            return
-        today = now_tehran().date()
-        week_ago = today - datetime.timedelta(days=7)
-        total_week = sum(h for d, _, h in logs if d >= week_ago)
-        total_prev = sum(h for d, _, h in logs if week_ago - datetime.timedelta(days=7) <= d < week_ago)
-        diff = total_week - total_prev
-        trend = "📈 پیشرفت" if diff > 0 else "📉 پسرفت" if diff < 0 else "➖ بدون تغییر"
-        send_message(chat_id,
-                     f"مطالعه 7 روز اخیر: {total_week:.1f} ساعت\n"
-                     f"هفته قبل‌تر: {total_prev:.1f} ساعت\n"
-                     f"وضعیت: {trend}")
-        return
-
-    # Exams
-    exam = ALIASES.get(txt.lower(), txt)
-    if exam in EXAMS:
-        exam_jdt, start_time = EXAMS[exam]
-        d, h, m = countdown(exam_jdt)
-        if d >= 0:
-            send_message(chat_id,
-                         f"⏳ تا کنکور «{exam}» {d} روز و {h} ساعت و {m} دقیقه مونده.\n"
-                         f"🕗 ساعت شروع: {start_time}")
+            send_message(chat_id, "📭 هنوز مطالعه‌ای ثبت نکردی.")
         else:
-            send_message(chat_id, f"کنکور «{exam}» برگزار شده است.")
-        return
+            total = sum(entry["duration"] for entry in logs)
+            details = "\n".join(
+                f"• {e['subject']} | {e['start']} تا {e['end']} | {e['duration']} ساعت"
+                for e in logs
+            )
+            send_message(chat_id, f"📊 مجموع مطالعه: {total} ساعت\n\n{details}")
 
-    # Default fallback
-    send_message(chat_id, "❓ دستور ناشناخته. از منو استفاده کن.", reply_markup=main_menu())
+    elif text == "⬅️ بازگشت":
+        send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
+    elif text.startswith("🧪"):
+        send_message(chat_id, get_countdown("تجربی"))
+    elif text.startswith("📐"):
+        send_message(chat_id, get_countdown("ریاضی"))
+    elif text.startswith("📚"):
+        send_message(chat_id, get_countdown("انسانی"))
+    elif text.startswith("🎨"):
+        send_message(chat_id, get_countdown("هنر"))
+    elif text.startswith("🏫"):
+        send_message(chat_id, get_countdown("فرهنگیان"))
+
+    else:
+        # تلاش برای ثبت مطالعه
+        try:
+            parts = [p.strip() for p in text.split("،")]
+            if len(parts) == 4:
+                subject, start_time, end_time, duration = parts
+                duration = float(duration)
+                if chat_id not in user_study:
+                    user_study[chat_id] = []
+                user_study[chat_id].append(
+                    {"subject": subject, "start": start_time, "end": end_time, "duration": duration}
+                )
+                send_message(chat_id, f"✅ مطالعه {subject} از {start_time} تا {end_time} به مدت {duration} ساعت ثبت شد.")
+            else:
+                send_message(chat_id, "❌ فرمت اشتباه است. لطفاً دوباره وارد کن.")
+        except Exception as e:
+            logger.error(f"Study parse error: {e}")
+            send_message(chat_id, "⚠️ مشکلی در ثبت پیش آمد. دوباره امتحان کن.")
+
+# وبهوک
+@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+def webhook():
+    try:
+        data = request.get_json()
+        logger.info(f"📩 Update: {data}")
+
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
+            handle_message(chat_id, text)
+    except Exception as e:
+        logger.error(f"webhook error: {e}")
+    return "ok"
+
+# ست وبهوک
 @app.route("/set_webhook")
 def set_webhook():
-    if not PUBLIC_URL:
-        return jsonify({"ok": False, "error": "PUBLIC_URL not set"})
-    webhook_url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
-    try:
-        r = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if not url:
+        return "❌ PUBLIC_URL or RENDER_EXTERNAL_URL not set"
+    wh_url = f"{url}/webhook/{TOKEN}"
+    resp = requests.get(f"{TELEGRAM_API}/setWebhook?url={wh_url}")
+    return resp.text
 
 if __name__ == "__main__":
-    if PUBLIC_URL:
-        try:
-            webhook_url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
-            requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-        except Exception as e:
-            logger.warning(f"Webhook set error: {e}")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
