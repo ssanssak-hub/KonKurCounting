@@ -1,195 +1,235 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 import os
-import random
-import logging
-from flask import Flask, request
-import requests
-import jdatetime
+import json
 import sqlite3
-from datetime import datetime, timezone, timedelta
+import datetime
+import logging
+from typing import Optional
 
-# ----------------- تنظیمات -----------------
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("❌ BOT_TOKEN در متغیرهای محیطی تنظیم نشده!")
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    ZoneInfo = None
 
-BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
-PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_URL")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", TOKEN)
-WEBHOOK_URL = f"{PUBLIC_URL}/webhook/{WEBHOOK_SECRET}"
+import jdatetime
+import requests
+from flask import Flask, request, jsonify
 
+# ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----------------- دیتابیس -----------------
+# ---------------- Config ----------------
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+PUBLIC_URL = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN environment variable is missing.")
+
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}" if WEBHOOK_SECRET else f"/webhook/{BOT_TOKEN}"
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+app = Flask(__name__)
+
+# ---------------- Database ----------------
 DB_FILE = "study.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS study_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            subject TEXT,
-            start_time TEXT,
-            duration REAL,
-            date TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS study_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                subject TEXT,
+                start_time TEXT,
+                duration REAL,
+                date TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully.")
+    except Exception as e:
+        logger.error(f"DB init failed: {e}")
 
-def add_study(user_id, subject, start_time, duration):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO study_log (user_id, subject, start_time, duration, date) VALUES (?, ?, ?, ?, ?)",
-                (user_id, subject, start_time, duration, datetime.utcnow().date().isoformat()))
-    conn.commit()
-    conn.close()
+init_db()
 
-def get_study_summary(user_id, days=1):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    start_date = (datetime.utcnow().date() - timedelta(days=days-1)).isoformat()
-    cur.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date >= ?", (user_id, start_date))
-    result = cur.fetchone()[0]
-    conn.close()
-    return result or 0
-
-def get_weekly_comparison(user_id):
-    today = datetime.utcnow().date()
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-
-    cur.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date BETWEEN ? AND ?",
-                (user_id, (today - timedelta(days=6)).isoformat(), today.isoformat()))
-    this_week = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date BETWEEN ? AND ?",
-                (user_id, (today - timedelta(days=13)).isoformat(), (today - timedelta(days=7)).isoformat()))
-    last_week = cur.fetchone()[0] or 0
-
-    conn.close()
-    return this_week, last_week
-
-# ----------------- جملات انگیزشی -----------------
-QUOTES = [
-    "✨ هر قدمی که برمی‌داری، تو رو به هدفت نزدیک‌تر می‌کنه!",
-    "🚀 موفقیت از آن کسانی‌ست که ادامه می‌دهند.",
-    "🔥 سختی‌ها می‌گذره، اما ثمره تلاش موندگار میشه.",
-    "🌱 هر روز یه فرصت جدیده برای بهتر شدن.",
-    "🏆 باور داشته باش، تو می‌تونی!",
-    "💡 کنکور فقط یک مرحله‌ست، آینده تو خیلی روشن‌تره!"
-]
-
-def get_random_quote():
-    return random.choice(QUOTES)
-
-# ----------------- تاریخ کنکورها -----------------
+# ---------------- Exams ----------------
 EXAMS = {
-    "تجربی": datetime(2025, 6, 27, 8, 0, tzinfo=timezone.utc),
-    "ریاضی": datetime(2025, 6, 27, 8, 0, tzinfo=timezone.utc),
-    "انسانی": datetime(2025, 6, 27, 8, 0, tzinfo=timezone.utc),
-    "هنر": datetime(2025, 6, 26, 14, 30, tzinfo=timezone.utc),
-    "فرهنگیان روز اول": datetime(2025, 5, 7, 8, 0, tzinfo=timezone.utc),
-    "فرهنگیان روز دوم": datetime(2025, 5, 8, 8, 0, tzinfo=timezone.utc),
+    "تجربی": (jdatetime.datetime(1405, 4, 12, 8, 0), "08:00 صبح"),
+    "ریاضی": (jdatetime.datetime(1405, 4, 11, 8, 0), "08:00 صبح"),
+    "انسانی": (jdatetime.datetime(1405, 4, 11, 8, 0), "08:00 صبح"),
+    "هنر": (jdatetime.datetime(1405, 4, 12, 14, 30), "14:30 بعدازظهر"),
+    "فرهنگیان": (jdatetime.datetime(1405, 2, 17, 8, 0), "08:00 صبح (17 و 18 اردیبهشت)"),
 }
 
-def get_countdown_message():
-    now = datetime.now(timezone.utc)
-    messages = []
-    for exam, date in EXAMS.items():
-        diff = date - now
-        if diff.total_seconds() > 0:
-            days, seconds = diff.days, diff.seconds
-            hours, minutes = divmod(seconds // 60, 60)
-            jd = jdatetime.datetime.fromgregorian(datetime=date.astimezone())
-            messages.append(f"⏳ تا کنکور {exam} ({jd.strftime('%Y/%m/%d %H:%M')}): {days} روز و {hours} ساعت و {minutes} دقیقه")
-        else:
-            messages.append(f"✅ کنکور {exam} برگزار شده است.")
-    return "\n".join(messages)
+ALIASES = {
+    "tajrobi": "تجربی",
+    "riazi": "ریاضی",
+    "ensani": "انسانی",
+    "honar": "هنر",
+    "farhangi": "فرهنگیان",
+}
 
-# ----------------- ربات -----------------
-def send_message(chat_id: int, text: str, reply_markup=None):
-    url = f"{BASE_URL}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
-    r = requests.post(url, json=payload)
-    if not r.ok:
-        logger.error(f"❌ ارسال پیام ناموفق: {r.text}")
+# ---------------- Utils ----------------
+def to_gregorian(jdt: jdatetime.datetime) -> datetime.datetime:
+    return jdt.togregorian()
 
-def build_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "📅 شمارش معکوس کنکور"}],
-            [{"text": "📊 گزارش مطالعه"}],
-            [{"text": "🏠 بازگشت به منو"}],
-        ],
-        "resize_keyboard": True
-    }
+def now_tehran() -> datetime.datetime:
+    try:
+        if ZoneInfo:
+            return datetime.datetime.now(ZoneInfo("Asia/Tehran"))
+    except Exception:
+        pass
+    return datetime.datetime.utcnow()
 
-# ----------------- Flask -----------------
-app = Flask(__name__)
+def days_until(jdt: jdatetime.datetime) -> int:
+    try:
+        return (to_gregorian(jdt).date() - now_tehran().date()).days
+    except Exception as e:
+        logger.error(f"days_until error: {e}")
+        return -999
 
-@app.route("/")
-def home():
-    return "ربات شمارش معکوس + مدیریت مطالعه فعال است ✅"
+def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None):
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+    try:
+        r = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.error(f"send_message failed: {e}")
 
-@app.route(f"/webhook/{WEBHOOK_SECRET}", methods=["POST"])
+def build_main_keyboard() -> dict:
+    keyboard = [
+        [{"text": "تجربی"}, {"text": "ریاضی"}],
+        [{"text": "انسانی"}, {"text": "هنر"}],
+        [{"text": "فرهنگیان"}],
+    ]
+    return {"keyboard": keyboard, "resize_keyboard": True}
+
+def resolve_exam(text: str) -> Optional[str]:
+    t = text.strip().lower()
+    if t in EXAMS:
+        return t
+    if t in ALIASES:
+        return ALIASES[t]
+    return None
+
+# ---------------- Flask Routes ----------------
+@app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    data = request.get_json()
-    logger.info(f"آپدیت: {data}")
+    try:
+        update = request.get_json(force=True, silent=True)
+        if not update:
+            return jsonify({"ok": False}), 400
 
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
+        message = update.get("message") or update.get("edited_message")
+        if message:
+            chat_id = message["chat"]["id"]
+            text = message.get("text") or ""
+            if text:
+                handle_message(chat_id, text, message["from"]["id"])
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+    return "OK"
 
-        if text.startswith("/add"):
+def handle_message(chat_id: int, text: str, user_id: int):
+    try:
+        lower = text.strip().lower()
+
+        if lower.startswith("/start") or lower.startswith("شروع"):
+            msg = (
+                "سلام 👋\n"
+                "من ربات روزشمار و برنامه‌ریز کنکور هستم 📚\n\n"
+                "رشته‌ها:\n"
+                "• تجربی (12 تیر 1405 ساعت 08:00)\n"
+                "• ریاضی (11 تیر 1405 ساعت 08:00)\n"
+                "• انسانی (11 تیر 1405 ساعت 08:00)\n"
+                "• هنر (12 تیر 1405 ساعت 14:30)\n"
+                "• فرهنگیان (17 و 18 اردیبهشت 1405 ساعت 08:00)\n\n"
+                "➕ برای ثبت مطالعه: `/add درس ساعتشروع مدت(ساعت)`\n"
+                "📊 برای مشاهده پیشرفت: `/progress`"
+            )
+            send_message(chat_id, msg, reply_markup=build_main_keyboard())
+            return
+
+        if lower.startswith("/add"):
+            parts = text.split()
+            if len(parts) != 4:
+                send_message(chat_id, "❌ فرمت دستور اشتباه است.\nمثال: /add ریاضی 08:00 2")
+                return
+            _, subject, start_time, duration = parts
             try:
-                _, subject, start, duration = text.split(maxsplit=3)
-                add_study(chat_id, subject, start, float(duration))
-                send_message(chat_id, f"✅ مطالعه {subject} به مدت {duration} ساعت ثبت شد.\n\n{get_random_quote()}", build_keyboard())
+                dur = float(duration)
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute("INSERT INTO study_log (user_id, subject, start_time, duration, date) VALUES (?, ?, ?, ?, ?)",
+                          (user_id, subject, start_time, dur, now_tehran().date().isoformat()))
+                conn.commit()
+                conn.close()
+                send_message(chat_id, f"✅ {dur} ساعت مطالعه برای {subject} ثبت شد.")
             except Exception as e:
-                send_message(chat_id, "❌ فرمت درست: /add <درس> <ساعت شروع> <مدت ساعت>", build_keyboard())
+                logger.error(f"/add failed: {e}")
+                send_message(chat_id, "❌ خطا در ثبت مطالعه.")
+            return
 
-        elif text.startswith("/today"):
-            total = get_study_summary(chat_id, 1)
-            send_message(chat_id, f"📚 امروز {total:.1f} ساعت درس خوندی.\n\n{get_random_quote()}", build_keyboard())
+        if lower.startswith("/progress"):
+            try:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                today = now_tehran().date()
+                week_ago = today - datetime.timedelta(days=7)
 
-        elif text.startswith("/week") or text == "📊 گزارش مطالعه":
-            this_week, last_week = get_weekly_comparison(chat_id)
-            diff = this_week - last_week
-            trend = "📈 پیشرفت" if diff > 0 else ("📉 پسرفت" if diff < 0 else "➡️ بدون تغییر")
-            send_message(chat_id,
-                         f"📊 گزارش مطالعه هفتگی:\n"
-                         f"این هفته: {this_week:.1f} ساعت\n"
-                         f"هفته قبل: {last_week:.1f} ساعت\n"
-                         f"{trend}: {diff:.1f} ساعت\n\n{get_random_quote()}",
-                         build_keyboard())
+                c.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date>=?", (user_id, str(week_ago)))
+                week_total = c.fetchone()[0] or 0
 
-        elif text in ["/countdown", "📅 شمارش معکوس کنکور"]:
-            send_message(chat_id, f"{get_countdown_message()}\n\n{get_random_quote()}", build_keyboard())
+                c.execute("SELECT SUM(duration) FROM study_log WHERE user_id=? AND date<? AND date>=?", (user_id, str(week_ago), str(week_ago - datetime.timedelta(days=7))))
+                prev_total = c.fetchone()[0] or 0
 
-        elif text in ["/start", "start", "🏠 بازگشت به منو"]:
-            send_message(chat_id,
-                         "👋 خوش اومدی!\n"
-                         "از دستورات زیر استفاده کن:\n\n"
-                         "📌 مدیریت مطالعه:\n"
-                         "/add <درس> <ساعت شروع> <مدت ساعت>\n"
-                         "/today → مجموع امروز\n"
-                         "/week → گزارش هفتگی\n\n"
-                         "📌 کنکور:\n"
-                         "/countdown → شمارش معکوس\n",
-                         build_keyboard())
+                conn.close()
 
-    return {"ok": True}
+                diff = week_total - prev_total
+                trend = "📈 پیشرفت" if diff > 0 else ("📉 پسرفت" if diff < 0 else "➖ بدون تغییر")
+                send_message(chat_id, f"این هفته: {week_total} ساعت\nهفته قبل: {prev_total} ساعت\nوضعیت: {trend}")
+            except Exception as e:
+                logger.error(f"/progress failed: {e}")
+                send_message(chat_id, "❌ خطا در محاسبه پیشرفت.")
+            return
 
-# ----------------- ست وبهوک -----------------
+        exam = resolve_exam(text)
+        if exam:
+            jdt, time_text = EXAMS[exam]
+            d = days_until(jdt)
+            if d >= 1:
+                msg = f"⏳ تا کنکور «{exam}» {d} روز مانده.\n🕗 ساعت شروع: {time_text}"
+            elif d == 0:
+                msg = f"🎯 امروز کنکور «{exam}» برگزار می‌شود!\n🕗 ساعت شروع: {time_text}"
+            else:
+                msg = f"✅ کنکور «{exam}» برگزار شده است."
+            send_message(chat_id, msg)
+        else:
+            send_message(chat_id, "❌ رشته یا دستور ناشناخته بود.", reply_markup=build_main_keyboard())
+
+    except Exception as e:
+        logger.error(f"handle_message error: {e}")
+        send_message(chat_id, "❌ خطای داخلی ربات.")
+
+@app.route("/set_webhook", methods=["GET"])
 def set_webhook():
-    url = f"{BASE_URL}/setWebhook"
-    r = requests.post(url, json={"url": WEBHOOK_URL})
-    logger.info(f"تنظیم وبهوک: {r.text}")
+    if not PUBLIC_URL:
+        return jsonify({"ok": False, "error": "PUBLIC_URL not set"}), 400
+    url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
+    try:
+        r = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": url}, timeout=10)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
-    init_db()
-    set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
