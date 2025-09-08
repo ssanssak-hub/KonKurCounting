@@ -85,6 +85,30 @@ QUOTES = [
 def get_random_quote():
     return random.choice(QUOTES)
 
+# ----------------- تاریخ کنکورها -----------------
+EXAMS = {
+    "تجربی": datetime(2025, 6, 27, 8, 0, tzinfo=timezone.utc),
+    "ریاضی": datetime(2025, 6, 27, 8, 0, tzinfo=timezone.utc),
+    "انسانی": datetime(2025, 6, 27, 8, 0, tzinfo=timezone.utc),
+    "هنر": datetime(2025, 6, 26, 14, 30, tzinfo=timezone.utc),
+    "فرهنگیان روز اول": datetime(2025, 5, 7, 8, 0, tzinfo=timezone.utc),
+    "فرهنگیان روز دوم": datetime(2025, 5, 8, 8, 0, tzinfo=timezone.utc),
+}
+
+def get_countdown_message():
+    now = datetime.now(timezone.utc)
+    messages = []
+    for exam, date in EXAMS.items():
+        diff = date - now
+        if diff.total_seconds() > 0:
+            days, seconds = diff.days, diff.seconds
+            hours, minutes = divmod(seconds // 60, 60)
+            jd = jdatetime.datetime.fromgregorian(datetime=date.astimezone())
+            messages.append(f"⏳ تا کنکور {exam} ({jd.strftime('%Y/%m/%d %H:%M')}): {days} روز و {hours} ساعت و {minutes} دقیقه")
+        else:
+            messages.append(f"✅ کنکور {exam} برگزار شده است.")
+    return "\n".join(messages)
+
 # ----------------- ربات -----------------
 def send_message(chat_id: int, text: str, reply_markup=None):
     url = f"{BASE_URL}/sendMessage"
@@ -96,6 +120,7 @@ def send_message(chat_id: int, text: str, reply_markup=None):
 def build_keyboard():
     return {
         "keyboard": [
+            [{"text": "📅 شمارش معکوس کنکور"}],
             [{"text": "📊 گزارش مطالعه"}],
             [{"text": "🏠 بازگشت به منو"}],
         ],
@@ -122,13 +147,13 @@ def webhook():
             try:
                 _, subject, start, duration = text.split(maxsplit=3)
                 add_study(chat_id, subject, start, float(duration))
-                send_message(chat_id, f"✅ مطالعه {subject} به مدت {duration} ساعت ثبت شد.", build_keyboard())
+                send_message(chat_id, f"✅ مطالعه {subject} به مدت {duration} ساعت ثبت شد.\n\n{get_random_quote()}", build_keyboard())
             except Exception as e:
                 send_message(chat_id, "❌ فرمت درست: /add <درس> <ساعت شروع> <مدت ساعت>", build_keyboard())
 
         elif text.startswith("/today"):
             total = get_study_summary(chat_id, 1)
-            send_message(chat_id, f"📚 امروز {total:.1f} ساعت درس خوندی.", build_keyboard())
+            send_message(chat_id, f"📚 امروز {total:.1f} ساعت درس خوندی.\n\n{get_random_quote()}", build_keyboard())
 
         elif text.startswith("/week") or text == "📊 گزارش مطالعه":
             this_week, last_week = get_weekly_comparison(chat_id)
@@ -138,14 +163,23 @@ def webhook():
                          f"📊 گزارش مطالعه هفتگی:\n"
                          f"این هفته: {this_week:.1f} ساعت\n"
                          f"هفته قبل: {last_week:.1f} ساعت\n"
-                         f"{trend}: {diff:.1f} ساعت",
+                         f"{trend}: {diff:.1f} ساعت\n\n{get_random_quote()}",
                          build_keyboard())
 
+        elif text in ["/countdown", "📅 شمارش معکوس کنکور"]:
+            send_message(chat_id, f"{get_countdown_message()}\n\n{get_random_quote()}", build_keyboard())
+
         elif text in ["/start", "start", "🏠 بازگشت به منو"]:
-            send_message(chat_id, "👋 خوش اومدی!\nاز دستورات زیر استفاده کن:\n"
-                                  "/add <درس> <ساعت شروع> <مدت ساعت>\n"
-                                  "/today → مجموع امروز\n"
-                                  "/week → گزارش هفتگی", build_keyboard())
+            send_message(chat_id,
+                         "👋 خوش اومدی!\n"
+                         "از دستورات زیر استفاده کن:\n\n"
+                         "📌 مدیریت مطالعه:\n"
+                         "/add <درس> <ساعت شروع> <مدت ساعت>\n"
+                         "/today → مجموع امروز\n"
+                         "/week → گزارش هفتگی\n\n"
+                         "📌 کنکور:\n"
+                         "/countdown → شمارش معکوس\n",
+                         build_keyboard())
 
     return {"ok": True}
 
