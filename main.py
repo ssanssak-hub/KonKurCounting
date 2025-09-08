@@ -5,6 +5,7 @@ import os
 import json
 import datetime
 import logging
+import time
 from typing import Optional
 
 try:
@@ -80,11 +81,20 @@ def countdown(target_jdt: jdatetime.datetime) -> (int, int, int):
     return days, hours, minutes
 
 def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None):
+    """Send a message with retry if rate-limited (429)."""
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+
     try:
-        requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10).raise_for_status()
+        resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
+        if resp.status_code == 429:  # Too Many Requests
+            data = resp.json()
+            retry_after = data.get("parameters", {}).get("retry_after", 3)
+            logger.warning(f"Rate limit hit. Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
+            return send_message(chat_id, text, reply_markup)
+        resp.raise_for_status()
     except Exception as e:
         logger.error(f"send_message error: {e}")
 
