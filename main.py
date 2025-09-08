@@ -1,39 +1,31 @@
-#!/usr/bin/env python3
-# coding: utf-8
-
 import os
-import json
-import datetime
+import random
 import logging
-from typing import Optional
-
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-except ImportError:
-    ZoneInfo = None
-
-import jdatetime
+from flask import Flask, request
 import requests
-from flask import Flask, request, jsonify
+import jdatetime
+from datetime import datetime, timezone
 
-# ---------------- Logging ----------------
+# ----------------- تنظیمات -----------------
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ BOT_TOKEN در متغیرهای محیطی تنظیم نشده!")
+
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+# استفاده از لینک رندر
+PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_URL")
+if not PUBLIC_URL:
+    raise ValueError("❌ PUBLIC_URL یا RENDER_EXTERNAL_URL تعریف نشده!")
+
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", TOKEN)
+WEBHOOK_URL = f"{PUBLIC_URL}/webhook/{WEBHOOK_SECRET}"
+
+# ----------------- لاگ -----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------------- Config ----------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PUBLIC_URL = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
-
-if not BOT_TOKEN:
-    raise RuntimeError("❌ BOT_TOKEN is missing")
-
-WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}" if WEBHOOK_SECRET else f"/webhook/{BOT_TOKEN}"
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-app = Flask(__name__)
-
-# ---------------- Exam Dates ----------------
+# ----------------- لیست آزمون‌ها -----------------
 EXAMS = {
     "تجربی": (jdatetime.datetime(1405, 4, 12, 8, 0), "🧪"),
     "ریاضی": (jdatetime.datetime(1405, 4, 11, 8, 0), "📐"),
@@ -43,47 +35,20 @@ EXAMS = {
     "فرهنگیان - روز دوم": (jdatetime.datetime(1405, 2, 18, 8, 0), "🏫"),
 }
 
-ALIASES = {
-    "tajrobi": "تجربی",
-    "riazi": "ریاضی",
-    "ensani": "انسانی",
-    "honar": "هنر",
-    "farhangian": "فرهنگیان - روز اول",
-    "farhangian2": "فرهنگیان - روز دوم",
-}
+# ----------------- جملات انگیزشی -----------------
+QUOTES = [
+    "✨ هر قدمی که برمی‌داری، تو رو به هدفت نزدیک‌تر می‌کنه!",
+    "🚀 موفقیت از آن کسانی‌ست که ادامه می‌دهند.",
+    "🔥 سختی‌ها می‌گذره، اما ثمره تلاش موندگار میشه.",
+    "🌱 هر روز یه فرصت جدیده برای بهتر شدن.",
+    "🏆 باور داشته باش، تو می‌تونی!",
+    "💡 کنکور فقط یک مرحله‌ست، آینده تو خیلی روشن‌تره!"
+]
 
-# ---------------- Helpers ----------------
-def to_gregorian(jdt: jdatetime.datetime) -> datetime.datetime:
-    return jdt.togregorian()
+def get_random_quote():
+    return random.choice(QUOTES)
 
-def now() -> datetime.datetime:
-    if ZoneInfo is not None:
-        return datetime.datetime.now(tz=ZoneInfo("Asia/Tehran"))
-    return datetime.datetime.utcnow()
-
-def countdown_text(jdt: jdatetime.datetime, exam: str, emoji: str) -> str:
-    target = to_gregorian(jdt).replace(tzinfo=None)
-    current = now().replace(tzinfo=None)
-    delta = target - current
-
-    days = delta.days
-    seconds = delta.seconds
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-
-    date_str = f"{jdt.year}/{jdt.month}/{jdt.day} - ساعت {jdt.hour:02d}:{jdt.minute:02d}"
-
-    if delta.total_seconds() > 0:
-        return (
-            f"{emoji} شمارش معکوس کنکور «{exam}»\n"
-            f"⏳ {days} روز، {hours} ساعت و {minutes} دقیقه مونده!\n"
-            f"🗓 تاریخ برگزاری: {date_str}"
-        )
-    elif -3600*5 < delta.total_seconds() <= 0:  # توی روز آزمون
-        return f"🚨 آزمون {exam} همین الان شروع شده! موفق باشی 🌹"
-    else:
-        return f"✅ آزمون {exam} برگزار شده است."
-
+# ----------------- توابع ربات -----------------
 def build_keyboard() -> dict:
     keyboard = [
         [{"text": "🧪 تجربی"}, {"text": "📐 ریاضی"}],
@@ -93,90 +58,79 @@ def build_keyboard() -> dict:
     ]
     return {"keyboard": keyboard, "resize_keyboard": True}
 
-def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None) -> None:
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    try:
-        resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"SendMessage error: {e}")
+def countdown_text(exam: str, exam_date: jdatetime.datetime, emoji: str) -> str:
+    now = datetime.now(timezone.utc)
+    exam_dt = exam_date.togregorian().replace(tzinfo=timezone.utc)
+    delta = exam_dt - now
 
-def resolve_exam(text: str) -> Optional[str]:
-    t = text.strip().lower()
-    for symbol in ["🧪","📐","📚","🎨","🏫"]:
-        t = t.replace(symbol, "").strip()
-    if t in EXAMS:
-        return t
-    if t in ALIASES:
-        return ALIASES[t]
-    return None
+    if delta.total_seconds() <= 0:
+        return f"{emoji} کنکور «{exam}» برگزار شده است! ✅"
 
-# ---------------- Routes ----------------
-@app.route(WEBHOOK_PATH, methods=["POST"])
+    days, remainder = divmod(int(delta.total_seconds()), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+
+    date_str = exam_date.strftime("%A %d %B %Y - %H:%M")
+    quote = get_random_quote()
+
+    return (
+        f"{emoji} شمارش معکوس کنکور «{exam}»\n"
+        f"⏳ {days} روز، {hours} ساعت و {minutes} دقیقه مونده!\n"
+        f"🗓 تاریخ برگزاری: {date_str}\n\n"
+        f"💡 جمله انگیزشی: {quote}"
+    )
+
+def send_message(chat_id: int, text: str, reply_markup=None):
+    url = f"{BASE_URL}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": reply_markup,
+    }
+    r = requests.post(url, json=payload)
+    if not r.ok:
+        logger.error(f"ارسال پیام ناموفق بود: {r.text}")
+
+# ----------------- Flask -----------------
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "ربات شمارش معکوس کنکور فعال است ✅"
+
+@app.route(f"/webhook/{WEBHOOK_SECRET}", methods=["POST"])
 def webhook():
-    update = request.get_json(force=True, silent=True)
-    if not update:
-        return jsonify({"ok": False}), 400
-
-    message = update.get("message") or update.get("edited_message")
-    if message:
-        chat_id = message["chat"]["id"]
-        text = message.get("text") or ""
-        if text:
-            handle_message(chat_id, text)
-
-    return "OK"
-
-def handle_message(chat_id: int, text: str) -> None:
-    text = text.strip()
-
-    if text in ["/start", "شروع", "🏠 بازگشت به منو"]:
-        welcome = (
-            "🎓 سلام به ربات شمارش معکوس کنکور ۱۴۰۵ خوش اومدی!\n\n"
-            "📌 رشته‌ت رو انتخاب کن تا تایمر دقیق رو ببینی ⏳"
-        )
-        send_message(chat_id, welcome, reply_markup=build_keyboard())
-        return
-
-    if text.startswith("/countdown"):
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2:
-            send_message(chat_id, "❌ دستور صحیح: /countdown <رشته>")
-            return
-        exam_name = parts[1]
-    else:
-        exam_name = text
-
-    exam = resolve_exam(exam_name)
-    if not exam:
-        send_message(chat_id, "❓ رشته ناشناخته است. یکی از گزینه‌ها رو انتخاب کن:", reply_markup=build_keyboard())
-        return
-
-    jdt, emoji = EXAMS[exam]
-    msg = countdown_text(jdt, exam, emoji)
-    send_message(chat_id, msg, reply_markup=build_keyboard())
-
-@app.route("/set_webhook", methods=["GET"])
-def set_webhook():
-    if not PUBLIC_URL:
-        return jsonify({"ok": False, "error": "PUBLIC_URL not set"}), 400
-    webhook_url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
     try:
-        r = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-        return jsonify(r.json())
+        data = request.get_json()
+        logger.info(f"آپدیت جدید: {data}")
+
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
+
+            if text in ["start", "/start", "🏠 بازگشت به منو"]:
+                send_message(chat_id, "📋 یکی از آزمون‌ها رو انتخاب کن:", build_keyboard())
+            else:
+                exam_name = text.replace("🧪 ", "").replace("📐 ", "").replace("📚 ", "").replace("🎨 ", "").replace("🏫 ", "")
+                if exam_name in EXAMS:
+                    exam_date, emoji = EXAMS[exam_name]
+                    msg = countdown_text(exam_name, exam_date, emoji)
+                    send_message(chat_id, msg, build_keyboard())
+                else:
+                    send_message(chat_id, "❌ آزمون نامعتبر. لطفاً از منو انتخاب کنید.", build_keyboard())
+
+        return {"ok": True}
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        logger.error(f"❌ خطا در پردازش وبهوک: {e}", exc_info=True)
+        return {"ok": False}, 500
 
-# ---------------- Main ----------------
+# ----------------- ست وبهوک -----------------
+def set_webhook():
+    url = f"{BASE_URL}/setWebhook"
+    payload = {"url": WEBHOOK_URL}
+    r = requests.post(url, json=payload)
+    logger.info(f"تنظیم وبهوک: {r.text}")
+
 if __name__ == "__main__":
-    if PUBLIC_URL:
-        try:
-            webhook_url = f"{PUBLIC_URL}{WEBHOOK_PATH}"
-            r = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-            logger.info(f"Webhook set: {r.text}")
-        except Exception as e:
-            logger.warning(f"Webhook setup failed: {e}")
-
+    set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
