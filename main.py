@@ -26,11 +26,14 @@ logger = logging.getLogger("main")
 
 # کنکورها
 EXAMS = {
-    "تجربی": {"date": jdatetime.datetime(1405, 4, 12, 8, 0), "time": "08:00 صبح"},
-    "ریاضی": {"date": jdatetime.datetime(1405, 4, 11, 8, 0), "time": "08:00 صبح"},
-    "انسانی": {"date": jdatetime.datetime(1405, 4, 11, 8, 0), "time": "08:00 صبح"},
-    "هنر": {"date": jdatetime.datetime(1405, 4, 12, 14, 30), "time": "14:30 عصر"},
-    "فرهنگیان": {"date": jdatetime.datetime(1405, 2, 17, 8, 0), "time": "08:00 صبح"},
+    "تجربی": [{"date": jdatetime.datetime(1405, 4, 12, 8, 0), "time": "08:00 صبح"}],
+    "ریاضی": [{"date": jdatetime.datetime(1405, 4, 11, 8, 0), "time": "08:00 صبح"}],
+    "انسانی": [{"date": jdatetime.datetime(1405, 4, 11, 8, 0), "time": "08:00 صبح"}],
+    "هنر":   [{"date": jdatetime.datetime(1405, 4, 12, 14, 30), "time": "14:30 عصر"}],
+    "فرهنگیان": [
+        {"date": jdatetime.datetime(1405, 2, 17, 8, 0), "time": "08:00 صبح"},
+        {"date": jdatetime.datetime(1405, 2, 18, 8, 0), "time": "08:00 صبح"},
+    ],
 }
 
 # دیتابیس ساده در حافظه
@@ -43,19 +46,7 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
 
     try:
-        logger.info(f"➡️ Sending payload: {payload}")
         resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
-
-        if resp.status_code == 429:
-            data = resp.json()
-            retry_after = data.get("parameters", {}).get("retry_after", 3)
-            logger.warning(f"⏳ Rate limit hit. Retrying after {retry_after} sec...")
-            time.sleep(retry_after)
-            return send_message(chat_id, text, reply_markup)
-
-        if resp.status_code == 400:
-            logger.error(f"❌ Bad Request: {resp.text}")
-
         resp.raise_for_status()
     except Exception as e:
         logger.error(f"send_message error: {e}, response: {getattr(resp, 'text', '')}")
@@ -88,10 +79,20 @@ def answer_callback_query(callback_query_id, text=""):
 def main_menu():
     return {
         "keyboard": [
+            [{"text": "🔎 چند روز تا کنکور؟"}],
+            [{"text": "📖 برنامه‌ریزی"}],
+        ],
+        "resize_keyboard": True,
+    }
+
+# کیبورد انتخاب کنکور
+def exam_menu():
+    return {
+        "keyboard": [
             [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنکور ریاضی"}],
             [{"text": "📚 کنکور انسانی"}, {"text": "🎨 کنکور هنر"}],
             [{"text": "🏫 کنکور فرهنگیان"}],
-            [{"text": "📖 برنامه‌ریزی"}],
+            [{"text": "⬅️ بازگشت"}],
         ],
         "resize_keyboard": True,
     }
@@ -109,28 +110,35 @@ def study_menu():
 
 # محاسبه تایمر
 def get_countdown(exam_name: str):
-    exam = EXAMS[exam_name]
-    now = datetime.now(timezone.utc)
-    exam_g = exam["date"].togregorian().replace(tzinfo=timezone.utc)
-    diff = exam_g - now
+    exams = EXAMS[exam_name]
+    results = []
+    for exam in exams:
+        now = datetime.now(timezone.utc)
+        exam_g = exam["date"].togregorian().replace(tzinfo=timezone.utc)
+        diff = exam_g - now
 
-    if diff.total_seconds() <= 0:
-        return f"✅ کنکور {exam_name} برگزار شده!"
+        if diff.total_seconds() <= 0:
+            results.append(f"✅ کنکور {exam_name} در تاریخ {exam['date'].strftime('%Y/%m/%d')} برگزار شده!")
+        else:
+            days, remainder = divmod(int(diff.total_seconds()), 86400)
+            hours, remainder = divmod(remainder, 3600)
+            minutes, _ = divmod(remainder, 60)
 
-    days, remainder = divmod(int(diff.total_seconds()), 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, _ = divmod(remainder, 60)
-
-    return (
-        f"⏳ تا کنکور <b>{exam_name}</b>: "
-        f"{days} روز، {hours} ساعت و {minutes} دقیقه مونده\n"
-        f"🕗 ساعت شروع: {exam['time']}"
-    )
+            results.append(
+                f"⏳ کنکور <b>{exam_name}</b>\n"
+                f"📅 تاریخ: {exam['date'].strftime('%d %B %Y')} (شمسی: {exam['date']})\n"
+                f"🕗 ساعت شروع: {exam['time']}\n"
+                f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} دقیقه\n"
+            )
+    return "\n".join(results)
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
     if text in ["شروع", "/start"]:
         send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
+
+    elif text == "🔎 چند روز تا کنکور؟":
+        send_message(chat_id, "یک کنکور رو انتخاب کن:", reply_markup=exam_menu())
 
     elif text == "📖 برنامه‌ریزی":
         send_message(chat_id, "📖 بخش برنامه‌ریزی:", reply_markup=study_menu())
