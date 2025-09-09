@@ -101,6 +101,7 @@ def study_menu():
     return {
         "keyboard": [
             [{"text": "➕ ثبت مطالعه"}, {"text": "📊 مشاهده پیشرفت"}],
+            [{"text": "🗑️ حذف مطالعه"}],
             [{"text": "⬅️ بازگشت"}],
         ],
         "resize_keyboard": True,
@@ -148,11 +149,21 @@ def handle_message(chat_id: int, text: str):
             send_message(chat_id, "📭 هنوز مطالعه‌ای ثبت نکردی.")
         else:
             total = sum(entry["duration"] for entry in logs)
+            details = "\n".join(
+                f"• {e['subject']} | {e['start']} تا {e['end']} | {e['duration']} ساعت"
+                for e in logs
+            )
+            send_message(chat_id, f"📊 مجموع مطالعه: {total} ساعت\n\n{details}")
+
+    elif text == "🗑️ حذف مطالعه":
+        logs = user_study.get(chat_id, [])
+        if not logs:
+            send_message(chat_id, "📭 چیزی برای حذف وجود نداره.")
+        else:
             for idx, e in enumerate(logs):
                 msg = f"• {e['subject']} | {e['start']} تا {e['end']} | {e['duration']} ساعت"
                 inline_kb = [[{"text": "❌ حذف", "callback_data": f"delete_{idx}"}]]
                 send_message_inline(chat_id, msg, inline_kb)
-            send_message(chat_id, f"📊 مجموع مطالعه: {total} ساعت")
 
     elif text == "⬅️ بازگشت":
         send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
