@@ -60,6 +60,19 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
     except Exception as e:
         logger.error(f"send_message error: {e}, response: {getattr(resp, 'text', '')}")
 
+# ارسال پیام با دکمه شیشه‌ای
+def send_message_inline(chat_id: int, text: str, inline_keyboard: list):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "reply_markup": json.dumps({"inline_keyboard": inline_keyboard}, ensure_ascii=False)
+    }
+    try:
+        requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
+    except Exception as e:
+        logger.error(f"send_message_inline error: {e}")
+
 # کیبورد اصلی
 def main_menu():
     return {
@@ -124,11 +137,11 @@ def handle_message(chat_id: int, text: str):
             send_message(chat_id, "📭 هنوز مطالعه‌ای ثبت نکردی.")
         else:
             total = sum(entry["duration"] for entry in logs)
-            details = "\n".join(
-                f"• {e['subject']} | {e['start']} تا {e['end']} | {e['duration']} ساعت"
-                for e in logs
-            )
-            send_message(chat_id, f"📊 مجموع مطالعه: {total} ساعت\n\n{details}")
+            for idx, e in enumerate(logs):
+                msg = f"• {e['subject']} | {e['start']} تا {e['end']} | {e['duration']} ساعت"
+                inline_kb = [[{"text": "❌ حذف", "callback_data": f"delete_{idx}"}]]
+                send_message_inline(chat_id, msg, inline_kb)
+            send_message(chat_id, f"📊 مجموع مطالعه: {total} ساعت")
 
     elif text == "⬅️ بازگشت":
         send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
@@ -163,14 +176,24 @@ def handle_message(chat_id: int, text: str):
             logger.error(f"Study parse error: {e}")
             send_message(chat_id, "⚠️ مشکلی در ثبت پیش آمد. دوباره امتحان کن.")
 
-# وبهوک
+# هندل دکمه حذف
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
 def webhook():
     try:
         data = request.get_json()
         logger.info(f"📩 Update: {data}")
 
-        if "message" in data:
+        if "callback_query" in data:
+            cq = data["callback_query"]
+            chat_id = cq["message"]["chat"]["id"]
+            cq_data = cq["data"]
+            if cq_data.startswith("delete_"):
+                idx = int(cq_data.split("_")[1])
+                if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
+                    removed = user_study[chat_id].pop(idx)
+                    send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
+
+        elif "message" in data:
             chat_id = data["message"]["chat"]["id"]
             text = data["message"].get("text", "")
             handle_message(chat_id, text)
