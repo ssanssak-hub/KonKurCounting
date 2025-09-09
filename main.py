@@ -4,6 +4,7 @@ import time
 import logging
 import jdatetime
 import requests
+import traceback
 from datetime import datetime, timezone
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -189,16 +190,14 @@ def handle_message(chat_id: int, text: str):
         else:
             for r in reminders:
                 msg = f"🔔 کنکور {r['exam']} – ساعت {r['time']}"
-                inline_kb = [[{"text": "❌ حذف", "callback_data": f"remdel_{r['exam']}"}]]
+                inline_kb = [[{"text": "❌ حذف", "callback_data": f"remdel|{r['exam']}"}]]
                 send_message_inline(chat_id, msg, inline_kb)
 
     elif text in ["🧪 کنکور تجربی", "📐 کنکور ریاضی", "📚 کنکور انسانی", "🎨 کنکور هنر", "🏫 کنکور فرهنگیان"]:
         exam_name = text.split()[1]
         if chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
-            # در حال تنظیم ساعت هست
             pass
         else:
-            # شروع تنظیم یادآوری
             user_reminders[chat_id]["pending_exam"] = exam_name
             user_reminders[chat_id]["step"] = "set_time"
             send_message(chat_id,
@@ -208,16 +207,21 @@ def handle_message(chat_id: int, text: str):
             )
 
     elif chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
-        try:
-            reminder_time = text.strip()
-            exam_name = user_reminders[chat_id]["pending_exam"]
-            schedule_reminder(chat_id, exam_name, reminder_time)
+        if text == "⬅️ بازگشت":
             user_reminders[chat_id]["step"] = None
             user_reminders[chat_id]["pending_exam"] = None
-            send_message(chat_id, f"✅ یادآوری برای کنکور {exam_name} هر روز در ساعت {reminder_time} تنظیم شد.")
-        except Exception as e:
-            logger.error(f"reminder error: {e}")
-            send_message(chat_id, "⚠️ فرمت ساعت درست نیست. لطفاً دوباره وارد کن (مثال: 20:00)")
+            send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
+        else:
+            try:
+                reminder_time = text.strip()
+                exam_name = user_reminders[chat_id]["pending_exam"]
+                schedule_reminder(chat_id, exam_name, reminder_time)
+                user_reminders[chat_id]["step"] = None
+                user_reminders[chat_id]["pending_exam"] = None
+                send_message(chat_id, f"✅ یادآوری برای کنکور {exam_name} هر روز در ساعت {reminder_time} تنظیم شد.")
+            except Exception as e:
+                logger.error(f"reminder error: {traceback.format_exc()}")
+                send_message(chat_id, "⚠️ فرمت ساعت درست نیست. لطفاً دوباره وارد کن (مثال: 20:00)")
 
     elif text == "➕ ثبت مطالعه":
         send_message(
@@ -253,7 +257,6 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
     else:
-        # تلاش برای ثبت مطالعه
         try:
             parts = [p.strip() for p in text.split("،")]
             if len(parts) == 4:
@@ -268,7 +271,7 @@ def handle_message(chat_id: int, text: str):
             else:
                 send_message(chat_id, "❌ فرمت اشتباه است. لطفاً دوباره وارد کن.")
         except Exception as e:
-            logger.error(f"Study parse error: {e}")
+            logger.error(f"Study parse error: {traceback.format_exc()}")
             send_message(chat_id, "⚠️ مشکلی در ثبت پیش آمد. دوباره امتحان کن.")
 
 # هندل دکمه حذف
@@ -288,8 +291,8 @@ def webhook():
                     removed = user_study[chat_id].pop(idx)
                     send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
                 answer_callback_query(cq["id"], "حذف شد ✅")
-            elif cq_data.startswith("remdel_"):
-                exam_name = cq_data.split("_")[1]
+            elif cq_data.startswith("remdel|"):
+                exam_name = cq_data.split("|", 1)[1]
                 remove_reminder(chat_id, exam_name)
                 send_message(chat_id, f"🗑️ یادآوری کنکور {exam_name} حذف شد.")
                 answer_callback_query(cq["id"], "حذف شد ✅")
@@ -299,7 +302,7 @@ def webhook():
             text = data["message"].get("text", "")
             handle_message(chat_id, text)
     except Exception as e:
-        logger.error(f"webhook error: {e}")
+        logger.error(f"webhook error: {traceback.format_exc()}")
     return "ok"
 
 # ست وبهوک
