@@ -39,7 +39,7 @@ EXAMS = {
 
 # دیتابیس ساده در حافظه
 user_study = {}
-user_reminders = {}  # {chat_id: {exam: exam_name, time: "HH:MM"}}
+user_reminders = {}  # {chat_id: {"reminders": [{exam, time}], "step": None, "pending_exam": None}}
 
 # Scheduler
 scheduler = BackgroundScheduler()
@@ -92,17 +92,17 @@ def main_menu():
         "resize_keyboard": True,
     }
 
-# کیبورد انتخاب کنکور
-def exam_menu():
-    return {
-        "keyboard": [
-            [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنکور ریاضی"}],
-            [{"text": "📚 کنکور انسانی"}, {"text": "🎨 کنکور هنر"}],
-            [{"text": "🏫 کنکور فرهنگیان"}],
-            [{"text": "⬅️ بازگشت"}],
-        ],
-        "resize_keyboard": True,
-    }
+# کیبورد انتخاب کنکور برای شمارش یا یادآوری
+def exam_menu(include_reminder_manage=False):
+    keyboard = [
+        [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنکور ریاضی"}],
+        [{"text": "📚 کنکور انسانی"}, {"text": "🎨 کنکور هنر"}],
+        [{"text": "🏫 کنکور فرهنگیان"}],
+    ]
+    if include_reminder_manage:
+        keyboard.append([{"text": "❌ مدیریت یادآوری‌ها"}])
+    keyboard.append([{"text": "⬅️ بازگشت"}])
+    return {"keyboard": keyboard, "resize_keyboard": True}
 
 # کیبورد برنامه‌ریزی
 def study_menu():
@@ -149,6 +149,23 @@ def schedule_reminder(chat_id: int, exam_name: str, reminder_time: str):
     job_id = f"reminder_{chat_id}_{exam_name}"
     scheduler.add_job(job, "cron", hour=hour, minute=minute, id=job_id, replace_existing=True)
 
+    if chat_id not in user_reminders:
+        user_reminders[chat_id] = {"reminders": [], "step": None, "pending_exam": None}
+
+    # جلوگیری از یادآوری تکراری
+    if not any(r["exam"] == exam_name for r in user_reminders[chat_id]["reminders"]):
+        user_reminders[chat_id]["reminders"].append({"exam": exam_name, "time": reminder_time})
+
+# حذف یادآوری
+def remove_reminder(chat_id: int, exam_name: str):
+    job_id = f"reminder_{chat_id}_{exam_name}"
+    try:
+        scheduler.remove_job(job_id)
+    except Exception:
+        pass
+    if chat_id in user_reminders:
+        user_reminders[chat_id]["reminders"] = [r for r in user_reminders[chat_id]["reminders"] if r["exam"] != exam_name]
+
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
     if text in ["شروع", "/start"]:
@@ -161,27 +178,42 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, "📖 بخش برنامه‌ریزی:", reply_markup=study_menu())
 
     elif text == "🔔 بهم یادآوری کن!":
-        send_message(chat_id, "برای کدوم کنکور می‌خوای یادآوری تنظیم کنی؟", reply_markup=exam_menu())
-        user_reminders[chat_id] = {"step": "choose_exam"}
+        send_message(chat_id, "برای کدوم کنکور می‌خوای یادآوری تنظیم کنی یا مدیریت کنی؟", reply_markup=exam_menu(include_reminder_manage=True))
+        if chat_id not in user_reminders:
+            user_reminders[chat_id] = {"reminders": [], "step": None, "pending_exam": None}
+
+    elif text == "❌ مدیریت یادآوری‌ها":
+        reminders = user_reminders.get(chat_id, {}).get("reminders", [])
+        if not reminders:
+            send_message(chat_id, "📭 هیچ یادآوری فعالی نداری.")
+        else:
+            for r in reminders:
+                msg = f"🔔 کنکور {r['exam']} – ساعت {r['time']}"
+                inline_kb = [[{"text": "❌ حذف", "callback_data": f"remdel_{r['exam']}"}]]
+                send_message_inline(chat_id, msg, inline_kb)
 
     elif text in ["🧪 کنکور تجربی", "📐 کنکور ریاضی", "📚 کنکور انسانی", "🎨 کنکور هنر", "🏫 کنکور فرهنگیان"]:
-        if chat_id in user_reminders and user_reminders[chat_id].get("step") == "choose_exam":
-            exam_name = text.split()[1]  # گرفتن اسم کنکور از متن دکمه
-            user_reminders[chat_id] = {"exam": exam_name, "step": "set_time"}
+        exam_name = text.split()[1]
+        if chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
+            # در حال تنظیم ساعت هست
+            pass
+        else:
+            # شروع تنظیم یادآوری
+            user_reminders[chat_id]["pending_exam"] = exam_name
+            user_reminders[chat_id]["step"] = "set_time"
             send_message(chat_id,
                 f"⏰ لطفاً ساعت یادآوری روزانه برای کنکور {exam_name} رو وارد کن.\n"
                 f"فرمت باید 24 ساعته باشه (HH:MM).\n\n"
                 f"مثال‌ها:\n20:00 → ساعت 8 شب\n07:30 → ساعت 7 و نیم صبح"
             )
-        else:
-            send_message(chat_id, get_countdown(text.split()[1]))
 
     elif chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
         try:
             reminder_time = text.strip()
-            exam_name = user_reminders[chat_id]["exam"]
+            exam_name = user_reminders[chat_id]["pending_exam"]
             schedule_reminder(chat_id, exam_name, reminder_time)
-            user_reminders[chat_id] = {}
+            user_reminders[chat_id]["step"] = None
+            user_reminders[chat_id]["pending_exam"] = None
             send_message(chat_id, f"✅ یادآوری برای کنکور {exam_name} هر روز در ساعت {reminder_time} تنظیم شد.")
         except Exception as e:
             logger.error(f"reminder error: {e}")
@@ -255,6 +287,11 @@ def webhook():
                 if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
                     removed = user_study[chat_id].pop(idx)
                     send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
+                answer_callback_query(cq["id"], "حذف شد ✅")
+            elif cq_data.startswith("remdel_"):
+                exam_name = cq_data.split("_")[1]
+                remove_reminder(chat_id, exam_name)
+                send_message(chat_id, f"🗑️ یادآوری کنکور {exam_name} حذف شد.")
                 answer_callback_query(cq["id"], "حذف شد ✅")
 
         elif "message" in data:
