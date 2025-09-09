@@ -7,6 +7,7 @@ import requests
 from datetime import datetime, timezone
 from flask import Flask, request
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Load .env
 load_dotenv()
@@ -38,6 +39,11 @@ EXAMS = {
 
 # دیتابیس ساده در حافظه
 user_study = {}
+user_reminders = {}  # {chat_id: {exam: exam_name, time: "HH:MM"}}
+
+# Scheduler
+scheduler = BackgroundScheduler()
+scheduler.start()
 
 # ارسال پیام
 def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
@@ -81,6 +87,7 @@ def main_menu():
         "keyboard": [
             [{"text": "🔎 چند روز تا کنکور؟"}],
             [{"text": "📖 برنامه‌ریزی"}],
+            [{"text": "🔔 بهم یادآوری کن!"}],
         ],
         "resize_keyboard": True,
     }
@@ -132,6 +139,16 @@ def get_countdown(exam_name: str):
             )
     return "\n".join(results)
 
+# ایجاد یادآوری
+def schedule_reminder(chat_id: int, exam_name: str, reminder_time: str):
+    hour, minute = map(int, reminder_time.split(":"))
+
+    def job():
+        send_message(chat_id, f"🔔 یادآوری روزانه\n\n{get_countdown(exam_name)}")
+
+    job_id = f"reminder_{chat_id}_{exam_name}"
+    scheduler.add_job(job, "cron", hour=hour, minute=minute, id=job_id, replace_existing=True)
+
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
     if text in ["شروع", "/start"]:
@@ -142,6 +159,33 @@ def handle_message(chat_id: int, text: str):
 
     elif text == "📖 برنامه‌ریزی":
         send_message(chat_id, "📖 بخش برنامه‌ریزی:", reply_markup=study_menu())
+
+    elif text == "🔔 بهم یادآوری کن!":
+        send_message(chat_id, "برای کدوم کنکور می‌خوای یادآوری تنظیم کنی؟", reply_markup=exam_menu())
+        user_reminders[chat_id] = {"step": "choose_exam"}
+
+    elif text in ["🧪 کنکور تجربی", "📐 کنکور ریاضی", "📚 کنکور انسانی", "🎨 کنکور هنر", "🏫 کنکور فرهنگیان"]:
+        if chat_id in user_reminders and user_reminders[chat_id].get("step") == "choose_exam":
+            exam_name = text.split()[1]  # گرفتن اسم کنکور از متن دکمه
+            user_reminders[chat_id] = {"exam": exam_name, "step": "set_time"}
+            send_message(chat_id,
+                f"⏰ لطفاً ساعت یادآوری روزانه برای کنکور {exam_name} رو وارد کن.\n"
+                f"فرمت باید 24 ساعته باشه (HH:MM).\n\n"
+                f"مثال‌ها:\n20:00 → ساعت 8 شب\n07:30 → ساعت 7 و نیم صبح"
+            )
+        else:
+            send_message(chat_id, get_countdown(text.split()[1]))
+
+    elif chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
+        try:
+            reminder_time = text.strip()
+            exam_name = user_reminders[chat_id]["exam"]
+            schedule_reminder(chat_id, exam_name, reminder_time)
+            user_reminders[chat_id] = {}
+            send_message(chat_id, f"✅ یادآوری برای کنکور {exam_name} هر روز در ساعت {reminder_time} تنظیم شد.")
+        except Exception as e:
+            logger.error(f"reminder error: {e}")
+            send_message(chat_id, "⚠️ فرمت ساعت درست نیست. لطفاً دوباره وارد کن (مثال: 20:00)")
 
     elif text == "➕ ثبت مطالعه":
         send_message(
@@ -175,17 +219,6 @@ def handle_message(chat_id: int, text: str):
 
     elif text == "⬅️ بازگشت":
         send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
-
-    elif text.startswith("🧪"):
-        send_message(chat_id, get_countdown("تجربی"))
-    elif text.startswith("📐"):
-        send_message(chat_id, get_countdown("ریاضی"))
-    elif text.startswith("📚"):
-        send_message(chat_id, get_countdown("انسانی"))
-    elif text.startswith("🎨"):
-        send_message(chat_id, get_countdown("هنر"))
-    elif text.startswith("🏫"):
-        send_message(chat_id, get_countdown("فرهنگیان"))
 
     else:
         # تلاش برای ثبت مطالعه
