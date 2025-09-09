@@ -73,6 +73,17 @@ def send_message_inline(chat_id: int, text: str, inline_keyboard: list):
     except Exception as e:
         logger.error(f"send_message_inline error: {e}")
 
+# پاسخ به callback_query
+def answer_callback_query(callback_query_id, text=""):
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = False
+    try:
+        requests.post(f"{TELEGRAM_API}/answerCallbackQuery", data=payload, timeout=10)
+    except Exception as e:
+        logger.error(f"answer_callback_query error: {e}")
+
 # کیبورد اصلی
 def main_menu():
     return {
@@ -192,6 +203,7 @@ def webhook():
                 if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
                     removed = user_study[chat_id].pop(idx)
                     send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
+                answer_callback_query(cq["id"], "حذف شد ✅")
 
         elif "message" in data:
             chat_id = data["message"]["chat"]["id"]
