@@ -55,8 +55,13 @@ def load_backup():
             user_study = data.get('user_study', {})
             user_reminders = data.get('user_reminders', {})
         logger.info("✅ Backup loaded successfully")
+        logger.info(f"📊 Loaded {len(user_reminders)} user reminders")
     except FileNotFoundError:
         logger.info("ℹ️ No backup file found, starting fresh")
+        user_study = {}
+        user_reminders = {}
+    except Exception as e:
+        logger.error(f"Backup load error: {e}")
         user_study = {}
         user_reminders = {}
 
@@ -86,8 +91,10 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
     try:
         resp = requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
         resp.raise_for_status()
+        return True
     except Exception as e:
         logger.error(f"send_message error: {e}, response: {getattr(resp, 'text', '')}")
+        return False
 
 # ارسال پیام با دکمه شیشه‌ای
 def send_message_inline(chat_id: int, text: str, inline_keyboard: list):
@@ -176,23 +183,39 @@ def reminder_exam_menu():
 def send_reminder_to_user(chat_id: int):
     """ارسال یادآوری کنکور به کاربر خاص"""
     try:
-        if chat_id not in user_reminders or not user_reminders[chat_id].get("enabled", False):
-            return
+        if chat_id not in user_reminders:
+            logger.warning(f"User {chat_id} not found in reminders")
+            return False
         
-        user_exams = user_reminders[chat_id].get("exams", [])
+        settings = user_reminders[chat_id]
+        if not settings.get("enabled", False):
+            logger.warning(f"Reminders disabled for user {chat_id}")
+            return False
+        
+        user_exams = settings.get("exams", [])
         if not user_exams:
-            return
+            logger.warning(f"No exams selected for user {chat_id}")
+            return False
         
         reminder_text = "⏰ یادآوری روزانه کنکور:\n\n"
         for exam_name in user_exams:
             if exam_name in EXAMS:
                 reminder_text += get_countdown(exam_name) + "\n\n"
         
-        send_message(chat_id, reminder_text)
-        logger.info(f"✅ یادآوری ارسال شد به کاربر {chat_id}")
+        if reminder_text == "⏰ یادآوری روزانه کنکور:\n\n":
+            reminder_text = "⏰ امروز کنکوری برای یادآوری ندارید!"
+        
+        success = send_message(chat_id, reminder_text)
+        if success:
+            logger.info(f"✅ یادآوری ارسال شد به کاربر {chat_id}")
+        else:
+            logger.error(f"❌ Failed to send reminder to user {chat_id}")
+        
+        return success
         
     except Exception as e:
-        logger.error(f"Error in send_reminder_to_user: {e}")
+        logger.error(f"Error in send_reminder_to_user for {chat_id}: {e}")
+        return False
 
 # محاسبه تایمر
 def get_countdown(exam_name: str):
@@ -238,23 +261,49 @@ def send_daily_reminders():
     try:
         now_iran = get_iran_time()
         logger.info(f"🔔 Checking reminders at Iran time: {now_iran}")
+        logger.info(f"📊 Total users with reminders: {len(user_reminders)}")
         
         active_reminders = 0
         for chat_id, settings in user_reminders.items():
-            if (settings.get("enabled", False) and 
-                settings.get("time", "") == now_iran and 
-                settings.get("exams")):
-                
+            user_time = settings.get("time", "")
+            user_enabled = settings.get("enabled", False)
+            user_exams = settings.get("exams", [])
+            
+            logger.debug(f"User {chat_id}: time={user_time}, enabled={user_enabled}, exams={user_exams}")
+            
+            if (user_enabled and user_time == now_iran and user_exams):
                 logger.info(f"⏰ Sending reminder to {chat_id} at {now_iran}")
-                send_reminder_to_user(chat_id)
-                active_reminders += 1
+                if send_reminder_to_user(chat_id):
+                    active_reminders += 1
                 # تاخیر کوچک بین ارسال به کاربران مختلف
-                time.sleep(1)
+                time.sleep(0.5)
         
         logger.info(f"✅ Sent reminders to {active_reminders} users")
                 
     except Exception as e:
-        logger.error(f"Reminder error: {e}")
+        logger.error(f"Reminder scheduler error: {e}")
+
+# نمایش تنظیمات کاربر
+def show_user_settings(chat_id: int):
+    """نمایش تنظیمات کاربر"""
+    if chat_id not in user_reminders:
+        return "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید."
+    
+    settings = user_reminders[chat_id]
+    enabled = settings.get("enabled", False)
+    time_str = settings.get("time", "08:00")
+    exams = settings.get("exams", [])
+    
+    status = "✅ فعال" if enabled else "❌ غیرفعال"
+    exams_text = ", ".join(exams) if exams else "هیچکدام"
+    
+    return (
+        f"🔧 تنظیمات یادآوری شما:\n\n"
+        f"• 🕐 زمان: {time_str}\n"
+        f"• 📚 کنکورها: {exams_text}\n"
+        f"• 📊 وضعیت: {status}\n\n"
+        f"برای تغییر تنظیمات از منوی زیر استفاده کنید:"
+    )
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
@@ -293,13 +342,8 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, "📝 کنکورهای مورد نظر برای یادآوری را انتخاب کنید:", reply_markup=reminder_exam_menu())
 
     elif text == "📋 مشاهده تنظیمات":
-        if chat_id in user_reminders and user_reminders[chat_id].get("enabled", False):
-            settings = user_reminders[chat_id]
-            exams_text = ", ".join(settings.get("exams", [])) or "هیچکدام"
-            text_msg = f"🔧 تنظیمات یادآوری:\n\n⏰ زمان: {settings.get('time', '08:00')}\n📚 کنکورها: {exams_text}\n✅ وضعیت: فعال"
-        else:
-            text_msg = "🔕 یادآوری غیرفعال است"
-        send_message(chat_id, text_msg, reply_markup=reminder_menu())
+        settings_text = show_user_settings(chat_id)
+        send_message(chat_id, settings_text, reply_markup=reminder_menu())
 
     elif text == "✅ تایید انتخاب":
         send_message(chat_id, "✅ کنکورهای مورد نظر برای یادآوری ثبت شدند", reply_markup=reminder_menu())
@@ -312,12 +356,13 @@ def handle_message(chat_id: int, text: str):
         if chat_id not in user_reminders:
             user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
         
-        if exam_name in user_reminders[chat_id].get("exams", []):
+        if "exams" not in user_reminders[chat_id]:
+            user_reminders[chat_id]["exams"] = []
+        
+        if exam_name in user_reminders[chat_id]["exams"]:
             user_reminders[chat_id]["exams"].remove(exam_name)
             send_message(chat_id, f"❌ {exam_name} از لیست یادآوری حذف شد", reply_markup=reminder_exam_menu())
         else:
-            if "exams" not in user_reminders[chat_id]:
-                user_reminders[chat_id]["exams"] = []
             user_reminders[chat_id]["exams"].append(exam_name)
             send_message(chat_id, f"✅ {exam_name} به لیست یادآوری اضافه شد", reply_markup=reminder_exam_menu())
         save_backup()
@@ -451,6 +496,10 @@ if __name__ == "__main__":
         logger.info("🤖 Bot started successfully!")
         logger.info(f"🕒 Current Iran time: {get_iran_time()}")
         logger.info(f"👥 Total users with reminders: {len(user_reminders)}")
+        
+        # نمایش تنظیمات همه کاربران برای دیباگ
+        for chat_id, settings in user_reminders.items():
+            logger.info(f"User {chat_id}: {settings}")
         
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
     finally:
