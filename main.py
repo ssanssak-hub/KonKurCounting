@@ -4,6 +4,7 @@ import time
 import logging
 import jdatetime
 import requests
+import matplotlib.pyplot as plt
 from datetime import datetime, timezone
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -63,6 +64,45 @@ def send_message_inline(chat_id: int, text: str, inline_keyboard: list):
         requests.post(f"{TELEGRAM_API}/sendMessage", data=payload, timeout=10)
     except Exception as e:
         logger.error(f"send_message_inline error: {e}")
+
+# ارسال عکس به تلگرام
+def send_photo(chat_id: int, photo_path: str, caption: str = ""):
+    try:
+        with open(photo_path, "rb") as f:
+            files = {"photo": f}
+            data = {"chat_id": chat_id, "caption": caption}
+            requests.post(f"{TELEGRAM_API}/sendPhoto", data=data, files=files, timeout=10)
+    except Exception as e:
+        logger.error(f"send_photo error: {e}")
+
+# رسم نمودار پیشرفت
+def generate_charts(chat_id: int, logs: list):
+    subjects = {}
+    for e in logs:
+        subjects[e["subject"]] = subjects.get(e["subject"], 0) + e["duration"]
+
+    if not subjects:
+        return None
+
+    # نمودار ستونی
+    plt.figure(figsize=(6,4))
+    plt.bar(subjects.keys(), subjects.values())
+    plt.xlabel("درس")
+    plt.ylabel("ساعت مطالعه")
+    plt.title("نمودار ستونی ساعات مطالعه")
+    bar_path = f"progress_bar_{chat_id}.png"
+    plt.savefig(bar_path, bbox_inches="tight")
+    plt.close()
+
+    # نمودار دایره‌ای
+    plt.figure(figsize=(5,5))
+    plt.pie(subjects.values(), labels=subjects.keys(), autopct="%1.1f%%")
+    plt.title("نمودار درصدی مطالعه")
+    pie_path = f"progress_pie_{chat_id}.png"
+    plt.savefig(pie_path, bbox_inches="tight")
+    plt.close()
+
+    return bar_path, pie_path
 
 # پاسخ به callback_query
 def answer_callback_query(callback_query_id, text=""):
@@ -163,6 +203,12 @@ def handle_message(chat_id: int, text: str):
             )
             send_message(chat_id, f"📊 مجموع مطالعه: {total} ساعت\n\n{details}")
 
+            charts = generate_charts(chat_id, logs)
+            if charts:
+                bar_path, pie_path = charts
+                send_photo(chat_id, bar_path, "📊 نمودار ستونی مطالعه‌ها")
+                send_photo(chat_id, pie_path, "🥧 نمودار دایره‌ای مطالعه‌ها")
+
     elif text == "🗑️ حذف مطالعه":
         logs = user_study.get(chat_id, [])
         if not logs:
@@ -188,7 +234,6 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, get_countdown("فرهنگیان"))
 
     else:
-        # تلاش برای ثبت مطالعه
         try:
             parts = [p.strip() for p in text.split("،")]
             if len(parts) == 4:
