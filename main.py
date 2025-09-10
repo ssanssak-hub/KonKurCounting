@@ -140,6 +140,7 @@ def restart_confirmation_menu():
         "keyboard": [
             [{"text": "✅ بله، ریستارت کن"}],
             [{"text": "❌ خیر، انصراف"}],
+            [{"text": "⬅️ بازگشت"}],
         ],
         "resize_keyboard": True,
     }
@@ -352,7 +353,7 @@ def show_user_settings(chat_id: int):
     return (
         f"🔧 تنظیمات یادآوری شما:\n\n"
         f"• 🕐 زمان: {time_str}\n"
-        f"• 📚 کنکورها: {exam_text}\n"
+        f"• 📚 کنکورها: {exams_text}\n"
         f"• 📊 وضعیت: {status}\n\n"
         f"برای تغییر تنظیمات از منوی زیر استفاده کنید:"
     )
@@ -383,15 +384,23 @@ def remove_all_exams_from_reminders(chat_id: int):
     save_backup()
     return True
 
-# تابع ریستارت ربات
-def restart_bot():
-    """ریستارت کردن ربات"""
+# تابع ریستارت ربات (نسخه بهبود یافته)
+def restart_bot(chat_id: int):
+    """ریستارت کردن ربات و اطلاع به کاربر"""
     try:
         logger.info("🔄 Restarting bot...")
+        send_message(chat_id, "🔄 ربات در حال راه‌اندازی مجدد است... لطفاً چند لحظه صبر کنید.")
+        
+        # ذخیره داده‌ها قبل از ریستارت
+        save_backup()
+        
+        # راه‌اندازی مجدد با استفاده از subprocess
         python = sys.executable
         os.execl(python, python, *sys.argv)
+        
     except Exception as e:
         logger.error(f"❌ Error restarting bot: {e}")
+        send_message(chat_id, "❌ خطا در ریستارت ربات. لطفاً بعداً تلاش کنید.", reply_markup=main_menu())
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
@@ -416,12 +425,16 @@ def handle_message(chat_id: int, text: str):
         )
 
     elif text == "✅ بله، ریستارت کن":
-        send_message(chat_id, "🔄 در حال ریستارت ربات... لطفاً چند لحظه صبر کنید.")
-        time.sleep(2)
-        restart_bot()
+        # ارسال پیام تأیید و سپس ریستارت
+        send_message(chat_id, "⏳ در حال ریستارت ربات...")
+        time.sleep(1)
+        restart_bot(chat_id)
 
     elif text == "❌ خیر، انصراف":
         send_message(chat_id, "✅ عمل ریستارت لغو شد.", reply_markup=main_menu())
+
+    elif text == "⬅️ بازگشت":
+        send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
     # مدیریت منوی یادآوری
     elif text == "✅ فعال کردن یادآوری":
@@ -544,9 +557,6 @@ def handle_message(chat_id: int, text: str):
                 msg = f"• {e['subject']} | {e['start']} تا {e['end']} | {e['duration']} ساعت"
                 inline_kb = [[{"text": "❌ حذف", "callback_data": f"delete_{idx}"}]]
                 send_message_inline(chat_id, msg, inline_kb)
-
-    elif text == "⬅️ بازگشت":
-        send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
     elif text.count(":") == 1 and len(text) == 5 and text.replace(":", "").isdigit():
         # مدیریت زمان یادآوری
