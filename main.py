@@ -418,9 +418,9 @@ def get_time_inline_keyboard(chat_id):
     """ایجاد کیبورد اینلاین برای انتخاب زمان"""
     current_time = user_reminders.get(chat_id, {}).get("time", "08:00")
     
-    # ایجاد دکمه‌های ساعت
+    # ایجاد دکمه‌های ساعت از 00 تا 23
     hours = []
-    for i in range(6, 23):
+    for i in range(0, 24):
         hour = f"{i:02d}"
         hours.append({
             "text": f"{'🟢' if hour == current_time.split(':')[0] else '⚪'} {hour}",
@@ -436,15 +436,22 @@ def get_time_inline_keyboard(chat_id):
             "callback_data": f"reminder_minute_{minute}"
         })
     
+    # تقسیم ساعت‌ها به ردیف‌های 6 تایی برای نمایش بهتر
     keyboard = [
         [{"text": "⏰ ساعت:", "callback_data": "reminder_time_label"}],
-        hours[:6],
-        hours[6:12],
-        hours[12:],
-        [{"text": "⏰ دقیقه:", "callback_data": "reminder_time_label"}],
-        minutes[:6],
-        minutes[6:12],
-        minutes[12:],
+    ]
+    
+    # اضافه کردن ساعت‌ها در ردیف‌های 6 تایی
+    for i in range(0, 24, 6):
+        keyboard.append(hours[i:i+6])
+    
+    keyboard.append([{"text": "⏰ دقیقه:", "callback_data": "reminder_time_label"}])
+    
+    # اضافه کردن دقیقه‌ها در ردیف‌های 6 تایی
+    for i in range(0, len(minutes), 6):
+        keyboard.append(minutes[i:i+6])
+    
+    keyboard.extend([
         [{
             "text": f"✅ تأیید زمان: {current_time}",
             "callback_data": "reminder_time_confirm"
@@ -457,7 +464,7 @@ def get_time_inline_keyboard(chat_id):
             "text": "⬅️ بازگشت به انتخاب روزها",
             "callback_data": "reminder_back_days"
         }]
-    ]
+    ])
     
     return keyboard
 
@@ -496,7 +503,7 @@ def send_reminder_to_user(chat_id: int):
     """ارسال یادآوری کنکور به کاربر خاص"""
     try:
         if chat_id not in user_reminders:
-            logger.warning(f"User {chat_id} not found in reminders")
+            logger.warning(f"User {chat_id not found in reminders")
             return False
         
         settings = user_reminders[chat_id]
@@ -565,7 +572,7 @@ def get_iran_time():
 
 # تابع ارسال یادآوری روزانه
 def send_daily_reminders():
-    """ارسال یادآوری روزانه به همه کاربران"""
+    """ارسان یادآوری روزانه به همه کاربران"""
     try:
         now_iran = get_iran_time()
         logger.info(f"🔔 Checking reminders at Iran time: {now_iran}")
@@ -997,7 +1004,7 @@ def set_webhook():
 if __name__ == "__main__":
     try:
         logger.info("🤖 Bot started successfully!")
-        logger.info(f"🕒 Current Iran time: {get_iran_time()}")
+        logger.info(f"🕒 Current Iran time: {get_iran_time()})
         logger.info(f"👥 Total users with reminders: {len(user_reminders)}")
         
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
