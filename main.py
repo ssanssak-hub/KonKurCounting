@@ -375,13 +375,6 @@ def remove_all_exams_from_reminders(chat_id: int):
 def restart_bot_for_user(chat_id: int):
     """ریستارت ربات برای کاربر - عملکرد شبیه به /start"""
     try:
-        # پاک کردن داده‌های کاربر (اختیاری - می‌توانید این بخش را حذف کنید اگر نمی‌خواهید داده‌ها پاک شوند)
-        # if chat_id in user_study:
-        #     del user_study[chat_id]
-        # if chat_id in user_reminders:
-        #     del user_reminders[chat_id]
-        # save_backup()
-        
         # ارسال پیام خوش‌آمدگویی مجدد
         send_message(
             chat_id,
@@ -623,7 +616,7 @@ def set_webhook():
     url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
     if not url:
         return "❌ PUBLIC_URL or RENDER_EXTERNAL_URL not set"
-    wh_url = f"{url}/webhook/{TOKEN}
+    wh_url = f"{url}/webhook/{TOKEN}"  # اینجا خطا برطرف شد
     resp = requests.get(f"{TELEGRAM_API}/setWebhook?url={wh_url}")
     return resp.text
 
