@@ -6,6 +6,8 @@ import jdatetime
 import requests
 import pickle
 import atexit
+import sys
+import subprocess
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -127,6 +129,17 @@ def main_menu():
             [{"text": "🔎 چند روز تا کنکور؟"}],
             [{"text": "📖 برنامه‌ریزی"}],
             [{"text": "🔔 بهم یادآوری کن!"}],
+            [{"text": "🔄 ریستارت ربات"}],
+        ],
+        "resize_keyboard": True,
+    }
+
+# کیبورد تأیید ریستارت
+def restart_confirmation_menu():
+    return {
+        "keyboard": [
+            [{"text": "✅ بله، ریستارت کن"}],
+            [{"text": "❌ خیر، انصراف"}],
         ],
         "resize_keyboard": True,
     }
@@ -160,7 +173,7 @@ def reminder_menu():
         "keyboard": [
             [{"text": "✅ فعال کردن یادآوری"}, {"text": "❌ غیرفعال کردن یادآوری"}],
             [{"text": "🕐 تنظیم زمان یادآوری"}, {"text": "📝 انتخاب کنکورها"}],
-            [{"text": "📋 مشاهده تنظیمات"}],
+            [{"text": "🗑️ حذف کنکورها"}, {"text": "📋 مشاهده تنظیمات"}],
             [{"text": "⬅️ بازگشت"}],
         ],
         "resize_keyboard": True,
@@ -176,6 +189,45 @@ def reminder_exam_menu():
             [{"text": "✅ تایید انتخاب"}],
             [{"text": "⬅️ بازگشت"}],
         ],
+        "resize_keyboard": True,
+    }
+
+# کیبورد حذف کنکور از لیست یادآوری
+def remove_exam_menu(chat_id: int):
+    """منوی حذف کنکور از لیست یادآوری"""
+    if chat_id not in user_reminders or not user_reminders[chat_id].get("exams"):
+        return {
+            "keyboard": [
+                [{"text": "📝 انتخاب کنکورها"}],
+                [{"text": "⬅️ بازگشت"}],
+            ],
+            "resize_keyboard": True,
+        }
+    
+    exams = user_reminders[chat_id]["exams"]
+    keyboard = []
+    
+    # ایجاد دکمه‌ها برای هر کنکور
+    for exam in exams:
+        exam_emoji = ""
+        if exam == "تجربی":
+            exam_emoji = "🧪"
+        elif exam == "ریاضی":
+            exam_emoji = "📐"
+        elif exam == "انسانی":
+            exam_emoji = "📚"
+        elif exam == "هنر":
+            exam_emoji = "🎨"
+        elif exam == "فرهنگیان":
+            exam_emoji = "🏫"
+        
+        keyboard.append([{"text": f"{exam_emoji} حذف {exam}"}])
+    
+    keyboard.append([{"text": "🗑️ حذف همه"}])
+    keyboard.append([{"text": "⬅️ بازگشت"}])
+    
+    return {
+        "keyboard": keyboard,
         "resize_keyboard": True,
     }
 
@@ -300,10 +352,46 @@ def show_user_settings(chat_id: int):
     return (
         f"🔧 تنظیمات یادآوری شما:\n\n"
         f"• 🕐 زمان: {time_str}\n"
-        f"• 📚 کنکورها: {exams_text}\n"
+        f"• 📚 کنکورها: {exam_text}\n"
         f"• 📊 وضعیت: {status}\n\n"
         f"برای تغییر تنظیمات از منوی زیر استفاده کنید:"
     )
+
+# حذف کنکور از لیست یادآوری
+def remove_exam_from_reminders(chat_id: int, exam_name: str):
+    """حذف یک کنکور از لیست یادآوری کاربر"""
+    if chat_id not in user_reminders:
+        return False
+    
+    if "exams" not in user_reminders[chat_id]:
+        return False
+    
+    if exam_name in user_reminders[chat_id]["exams"]:
+        user_reminders[chat_id]["exams"].remove(exam_name)
+        save_backup()
+        return True
+    
+    return False
+
+# حذف همه کنکورها از لیست یادآوری
+def remove_all_exams_from_reminders(chat_id: int):
+    """حذف همه کنکورها از لیست یادآوری کاربر"""
+    if chat_id not in user_reminders:
+        return False
+    
+    user_reminders[chat_id]["exams"] = []
+    save_backup()
+    return True
+
+# تابع ریستارت ربات
+def restart_bot():
+    """ریستارت کردن ربات"""
+    try:
+        logger.info("🔄 Restarting bot...")
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+    except Exception as e:
+        logger.error(f"❌ Error restarting bot: {e}")
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
@@ -318,6 +406,22 @@ def handle_message(chat_id: int, text: str):
 
     elif text == "🔔 بهم یادآوری کن!":
         send_message(chat_id, "🔔 مدیریت یادآوری روزانه:", reply_markup=reminder_menu())
+
+    elif text == "🔄 ریستارت ربات":
+        send_message(
+            chat_id,
+            "⚠️ آیا مطمئن هستید که می‌خواهید ربات را ریستارت کنید؟\n\n"
+            "این عمل باعث راه‌اندازی مجدد ربات می‌شود.",
+            reply_markup=restart_confirmation_menu()
+        )
+
+    elif text == "✅ بله، ریستارت کن":
+        send_message(chat_id, "🔄 در حال ریستارت ربات... لطفاً چند لحظه صبر کنید.")
+        time.sleep(2)
+        restart_bot()
+
+    elif text == "❌ خیر، انصراف":
+        send_message(chat_id, "✅ عمل ریستارت لغو شد.", reply_markup=main_menu())
 
     # مدیریت منوی یادآوری
     elif text == "✅ فعال کردن یادآوری":
@@ -341,6 +445,12 @@ def handle_message(chat_id: int, text: str):
     elif text == "📝 انتخاب کنکورها":
         send_message(chat_id, "📝 کنکورهای مورد نظر برای یادآوری را انتخاب کنید:", reply_markup=reminder_exam_menu())
 
+    elif text == "🗑️ حذف کنکورها":
+        if chat_id not in user_reminders or not user_reminders[chat_id].get("exams"):
+            send_message(chat_id, "📭 هیچ کنکوری برای حذف وجود ندارد. ابتدا کنکورها را انتخاب کنید.", reply_markup=reminder_menu())
+        else:
+            send_message(chat_id, "🗑️ کنکور مورد نظر برای حذف را انتخاب کنید:", reply_markup=remove_exam_menu(chat_id))
+
     elif text == "📋 مشاهده تنظیمات":
         settings_text = show_user_settings(chat_id)
         send_message(chat_id, settings_text, reply_markup=reminder_menu())
@@ -348,6 +458,43 @@ def handle_message(chat_id: int, text: str):
     elif text == "✅ تایید انتخاب":
         send_message(chat_id, "✅ کنکورهای مورد نظر برای یادآوری ثبت شدند", reply_markup=reminder_menu())
         save_backup()
+
+    # مدیریت حذف کنکورها از لیست یادآوری
+    elif text.startswith("🧪 حذف تجربی"):
+        if remove_exam_from_reminders(chat_id, "تجربی"):
+            send_message(chat_id, "✅ کنکور تجربی از لیست یادآوری حذف شد", reply_markup=remove_exam_menu(chat_id))
+        else:
+            send_message(chat_id, "❌ کنکور تجربی در لیست وجود ندارد", reply_markup=remove_exam_menu(chat_id))
+
+    elif text.startswith("📐 حذف ریاضی"):
+        if remove_exam_from_reminders(chat_id, "ریاضی"):
+            send_message(chat_id, "✅ کنکور ریاضی از لیست یادآوری حذف شد", reply_markup=remove_exam_menu(chat_id))
+        else:
+            send_message(chat_id, "❌ کنکور ریاضی در لیست وجود ندارد", reply_markup=remove_exam_menu(chat_id))
+
+    elif text.startswith("📚 حذف انسانی"):
+        if remove_exam_from_reminders(chat_id, "انسانی"):
+            send_message(chat_id, "✅ کنکور انسانی از لیست یادآوری حذف شد", reply_markup=remove_exam_menu(chat_id))
+        else:
+            send_message(chat_id, "❌ کنکور انسانی در لیست وجود ندارد", reply_markup=remove_exam_menu(chat_id))
+
+    elif text.startswith("🎨 حذف هنر"):
+        if remove_exam_from_reminders(chat_id, "هنر"):
+            send_message(chat_id, "✅ کنکور هنر از لیست یادآوری حذف شد", reply_markup=remove_exam_menu(chat_id))
+        else:
+            send_message(chat_id, "❌ کنکور هنر در لیست وجود ندارد", reply_markup=remove_exam_menu(chat_id))
+
+    elif text.startswith("🏫 حذف فرهنگیان"):
+        if remove_exam_from_reminders(chat_id, "فرهنگیان"):
+            send_message(chat_id, "✅ کنکور فرهنگیان از لیست یادآوری حذف شد", reply_markup=remove_exam_menu(chat_id))
+        else:
+            send_message(chat_id, "❌ کنکور فرهنگیان در لیست وجود ندارد", reply_markup=remove_exam_menu(chat_id))
+
+    elif text == "🗑️ حذف همه":
+        if remove_all_exams_from_reminders(chat_id):
+            send_message(chat_id, "✅ همه کنکورها از لیست یادآوری حذف شدند", reply_markup=reminder_menu())
+        else:
+            send_message(chat_id, "❌ هیچ کنکوری برای حذف وجود ندارد", reply_markup=reminder_menu())
 
     # مدیریت انتخاب کنکورها برای یادآوری
     elif text in ["🧪 تجربی", "📐 ریاضی", "📚 انسانی", "🎨 هنر", "🏫 فرهنگیان"]:
