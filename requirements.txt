@@ -6,3 +6,4 @@ python-dotenv>=1.0
 tzdata>=2023.3
 APScheduler>=3.10
 pytz
+apscheduler==3.10.4
