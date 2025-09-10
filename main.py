@@ -227,6 +227,7 @@ def handle_message(chat_id: int, text: str):
     elif text == "🔔 بهم یادآوری کن!":
         send_message(chat_id, "🔔 مدیریت یادآوری روزانه:", reply_markup=reminder_menu())
 
+    # مدیریت منوی یادآوری - باید قبل از منوی برنامه‌ریزی باشد
     elif text == "✅ فعال کردن یادآوری":
         if chat_id not in user_reminders:
             user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
@@ -260,9 +261,12 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, "✅ کنکورهای مورد نظر برای یادآوری ثبت شدند", reply_markup=reminder_menu())
         save_backup()
 
-    elif text in ["🧪 تجربی", "📐 ریاضی", "📚 انسانی", "🎨 هنر", "🏫 فرهنگیان"] and "user_reminder_state" in globals():
-        # مدیریت انتخاب کنکورها برای یادآوری
-        exam_name = text.split(" ")[1] if " " in text else text
+    # مدیریت انتخاب کنکورها برای یادآوری - باید قبل از منوی کنکور اصلی باشد
+    elif text in ["🧪 تجربی", "📐 ریاضی", "📚 انسانی", "🎨 هنر", "🏫 فرهنگیان"]:
+        # فقط اگر در منوی انتخاب کنکورهای یادآوری باشیم
+        exam_name = text.split(" ")[0] if " " in text else text
+        exam_name = exam_name.replace("🧪", "تجربی").replace("📐", "ریاضی").replace("📚", "انسانی").replace("🎨", "هنر").replace("🏫", "فرهنگیان")
+        
         if chat_id not in user_reminders:
             user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
         
@@ -320,15 +324,16 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, f"✅ زمان یادآوری روی {text} تنظیم شد", reply_markup=reminder_menu())
         save_backup()
 
-    elif text.startswith("🧪") and "کنکور" in text:
+    # این بخش باید در انتها باشد تا با دکمه‌های دیگر تداخل نداشته باشد
+    elif text.startswith("🧪 کنکور تجربی"):
         send_message(chat_id, get_countdown("تجربی"))
-    elif text.startswith("📐") and "کنکور" in text:
+    elif text.startswith("📐 کنکور ریاضی"):
         send_message(chat_id, get_countdown("ریاضی"))
-    elif text.startswith("📚") and "کنکور" in text:
+    elif text.startswith("📚 کنکور انسانی"):
         send_message(chat_id, get_countdown("انسانی"))
-    elif text.startswith("🎨") and "کنکور" in text:
+    elif text.startswith("🎨 کنکور هنر"):
         send_message(chat_id, get_countdown("هنر"))
-    elif text.startswith("🏫") and "کنکور" in text:
+    elif text.startswith("🏫 کنکور فرهنگیان"):
         send_message(chat_id, get_countdown("فرهنگیان"))
 
     else:
