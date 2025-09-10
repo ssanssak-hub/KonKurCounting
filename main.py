@@ -5,6 +5,7 @@ import logging
 import jdatetime
 import requests
 import traceback
+import re
 from datetime import datetime, timezone
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -40,15 +41,49 @@ EXAMS = {
 
 # دیتابیس ساده در حافظه
 user_study = {}
-user_reminders = {}  # {chat_id: {"reminders": [{exam, time}], "step": None, "pending_exam": None}}
+user_reminders = {}  # {chat_id: {"reminders": [{exam, time}], "step": None|"choose_exam"|"set_time", "pending_exam": str|None}}
 
 # Scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
 
+# --- Utilities ---
+# تبدیل اعداد فارسی/عربی به انگلیسی و نرمال‌سازی ساعت
+_DIGIT_MAP = str.maketrans({
+    "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
+    "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9",
+    "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
+    "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
+})
+
+_COLON_ALTS = ["؛", "،", "﹕", "：", "٫", "·", "٬"]
+_HIDDEN_CHARS = ["\u200f", "\u200e", "\u202a", "\u202b", "\u202c", "\u2066", "\u2067", "\u2068", "\u2069", "\ufeff", "\u200d"]
+
+_TIME_RE = re.compile(r"^(?:[01]?\d|2[0-3]):[0-5]\d$")
+
+def normalize_time_input(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    s = s.translate(_DIGIT_MAP)
+    for ch in _COLON_ALTS:
+        s = s.replace(ch, ":")
+    for ch in _HIDDEN_CHARS:
+        s = s.replace(ch, "")
+    return s.strip()
+
+def parse_time_to_hour_min(s: str):
+    s = normalize_time_input(s)
+    logger.info(f"⏱ Parsing time input: {repr(s)}")
+    if not _TIME_RE.match(s):
+        raise ValueError(f"bad time format: {s}")
+    hour_str, min_str = s.split(":", 1)
+    hour = int(hour_str)
+    minute = int(min_str)
+    return hour, minute, s
+
 # ارسال پیام
 def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
-    logger.info(f"📤 Sending message to chat_id={chat_id}: {text[:50]}")
+    logger.info(f"📤 Sending message to chat_id={chat_id}: {text[:80]}")
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
@@ -61,7 +96,7 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
 
 # ارسال پیام با دکمه شیشه‌ای
 def send_message_inline(chat_id: int, text: str, inline_keyboard: list):
-    logger.info(f"📤 Sending inline message to chat_id={chat_id}: {text[:50]}")
+    logger.info(f"📤 Sending inline message to chat_id={chat_id}: {text[:80]}")
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -142,9 +177,10 @@ def get_countdown(exam_name: str):
             )
     return "\n".join(results)
 
-# ایجاد یادآوری
+# ایجاد یادآوری با نرمال‌سازی ورودی زمان
 def schedule_reminder(chat_id: int, exam_name: str, reminder_time: str):
-    hour, minute = map(int, reminder_time.split(":"))
+    hour, minute, normalized = parse_time_to_hour_min(reminder_time)
+    logger.info(f"⏰ Scheduling reminder for chat_id={chat_id}, exam={exam_name}, time={normalized} -> {hour:02d}:{minute:02d}")
 
     def job():
         send_message(chat_id, f"🔔 یادآوری روزانه\n\n{get_countdown(exam_name)}")
@@ -156,8 +192,13 @@ def schedule_reminder(chat_id: int, exam_name: str, reminder_time: str):
         user_reminders[chat_id] = {"reminders": [], "step": None, "pending_exam": None}
 
     # جلوگیری از یادآوری تکراری
-    if not any(r["exam"] == exam_name for r in user_reminders[chat_id]["reminders"]):
-        user_reminders[chat_id]["reminders"].append({"exam": exam_name, "time": reminder_time})
+    existing = user_reminders[chat_id]["reminders"]
+    for r in existing:
+        if r["exam"] == exam_name:
+            r["time"] = f"{hour:02d}:{minute:02d}"
+            break
+    else:
+        existing.append({"exam": exam_name, "time": f"{hour:02d}:{minute:02d}"})
 
 # حذف یادآوری
 def remove_reminder(chat_id: int, exam_name: str):
@@ -184,6 +225,7 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, "برای کدوم کنکور می‌خوای یادآوری تنظیم کنی یا مدیریت کنی؟", reply_markup=exam_menu(include_reminder_manage=True))
         if chat_id not in user_reminders:
             user_reminders[chat_id] = {"reminders": [], "step": None, "pending_exam": None}
+        user_reminders[chat_id]["step"] = "choose_exam"
 
     elif text == "❌ مدیریت یادآوری‌ها":
         reminders = user_reminders.get(chat_id, {}).get("reminders", [])
@@ -197,16 +239,21 @@ def handle_message(chat_id: int, text: str):
 
     elif text in ["🧪 کنکور تجربی", "📐 کنکور ریاضی", "📚 کنکور انسانی", "🎨 کنکور هنر", "🏫 کنکور فرهنگیان"]:
         exam_name = text.split()[-1]
-        if chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
-            pass
-        else:
+
+        if user_reminders.get(chat_id, {}).get("step") == "choose_exam":
+            # حالت یادآوری
             user_reminders[chat_id]["pending_exam"] = exam_name
             user_reminders[chat_id]["step"] = "set_time"
             send_message(chat_id,
                 f"⏰ لطفاً ساعت یادآوری روزانه برای کنکور {exam_name} رو وارد کن.\n"
                 f"فرمت باید 24 ساعته باشه (HH:MM).\n\n"
-                f"مثال‌ها:\n20:00 → ساعت 8 شب\n07:30 → ساعت 7 و نیم صبح"
+                f"مثال‌ها:\n20:00 → ساعت 8 شب\n07:30 → ساعت 7 و نیم صبح\n\n"
+                f"نکته: می‌تونی از اعداد فارسی هم استفاده کنی (مثلاً ۰۷:۳۰)."
             )
+        else:
+            # حالت شمارش معکوس
+            countdown = get_countdown(exam_name)
+            send_message(chat_id, countdown)
 
     elif chat_id in user_reminders and user_reminders[chat_id].get("step") == "set_time":
         if text == "⬅️ بازگشت":
@@ -220,10 +267,11 @@ def handle_message(chat_id: int, text: str):
                 schedule_reminder(chat_id, exam_name, reminder_time)
                 user_reminders[chat_id]["step"] = None
                 user_reminders[chat_id]["pending_exam"] = None
-                send_message(chat_id, f"✅ یادآوری برای کنکور {exam_name} هر روز در ساعت {reminder_time} تنظیم شد.")
+                normalized = normalize_time_input(reminder_time)
+                send_message(chat_id, f"✅ یادآوری برای کنکور {exam_name} هر روز در ساعت {normalized} تنظیم شد.")
             except Exception as e:
                 logger.error(f"reminder error: {traceback.format_exc()}")
-                send_message(chat_id, "⚠️ فرمت ساعت درست نیست. لطفاً دوباره وارد کن (مثال: 20:00)")
+                send_message(chat_id, "⚠️ فرمت ساعت درست نیست. لطفاً دوباره وارد کن (مثال: 20:00 یا ۰۷:۳۰)")
 
     elif text == "➕ ثبت مطالعه":
         send_message(
@@ -270,52 +318,3 @@ def handle_message(chat_id: int, text: str):
                     {"subject": subject, "start": start_time, "end": end_time, "duration": duration}
                 )
                 send_message(chat_id, f"✅ مطالعه {subject} از {start_time} تا {end_time} به مدت {duration} ساعت ثبت شد.")
-            else:
-                send_message(chat_id, "❌ فرمت اشتباه است. لطفاً دوباره وارد کن.")
-        except Exception as e:
-            logger.error(f"Study parse error: {traceback.format_exc()}")
-            send_message(chat_id, "⚠️ مشکلی در ثبت پیش آمد. دوباره امتحان کن.")
-
-# هندل دکمه حذف
-@app.route(f"/webhook/{TOKEN}", methods=["POST"])
-def webhook():
-    try:
-        data = request.get_json()
-        logger.info(f"📩 Update: {data}")
-
-        if "callback_query" in data:
-            cq = data["callback_query"]
-            chat_id = cq["message"]["chat"]["id"]
-            cq_data = cq["data"]
-            if cq_data.startswith("delete_"):
-                idx = int(cq_data.split("_")[1])
-                if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
-                    removed = user_study[chat_id].pop(idx)
-                    send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
-                answer_callback_query(cq["id"], "حذف شد ✅")
-            elif cq_data.startswith("remdel|"):
-                exam_name = cq_data.split("|", 1)[1]
-                remove_reminder(chat_id, exam_name)
-                send_message(chat_id, f"🗑️ یادآوری کنکور {exam_name} حذف شد.")
-                answer_callback_query(cq["id"], "حذف شد ✅")
-
-        elif "message" in data:
-            chat_id = data["message"]["chat"]["id"]
-            text = data["message"].get("text", "")
-            handle_message(chat_id, text)
-    except Exception as e:
-        logger.error(f"webhook error: {traceback.format_exc()}")
-    return "ok"
-
-# ست وبهوک
-@app.route("/set_webhook")
-def set_webhook():
-    url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
-    if not url:
-        return "❌ PUBLIC_URL or RENDER_EXTERNAL_URL not set"
-    wh_url = f"{url}/webhook/{TOKEN}"
-    resp = requests.get(f"{TELEGRAM_API}/setWebhook?url={wh_url}")
-    return resp.text
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
