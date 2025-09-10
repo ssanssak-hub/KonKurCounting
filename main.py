@@ -4,9 +4,12 @@ import time
 import logging
 import jdatetime
 import requests
+import pickle
+import atexit
 from datetime import datetime, timezone
 from flask import Flask, request
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Load .env
 load_dotenv()
@@ -38,6 +41,41 @@ EXAMS = {
 
 # دیتابیس ساده در حافظه
 user_study = {}
+user_reminders = {}  # {chat_id: {"enabled": True/False, "time": "08:00", "exams": []}}
+
+# پشتیبان‌گیری
+BACKUP_FILE = "user_data_backup.pkl"
+
+def load_backup():
+    """بارگذاری داده‌های ذخیره شده"""
+    global user_study, user_reminders
+    try:
+        with open(BACKUP_FILE, 'rb') as f:
+            data = pickle.load(f)
+            user_study = data.get('user_study', {})
+            user_reminders = data.get('user_reminders', {})
+        logger.info("✅ Backup loaded successfully")
+    except FileNotFoundError:
+        logger.info("ℹ️ No backup file found, starting fresh")
+        user_study = {}
+        user_reminders = {}
+
+def save_backup():
+    """ذخیره داده‌ها"""
+    try:
+        data = {
+            'user_study': user_study,
+            'user_reminders': user_reminders
+        }
+        with open(BACKUP_FILE, 'wb') as f:
+            pickle.dump(data, f)
+        logger.info("✅ Backup saved successfully")
+    except Exception as e:
+        logger.error(f"Backup save error: {e}")
+
+# بارگذاری اولیه
+load_backup()
+atexit.register(save_backup)
 
 # ارسال پیام
 def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
@@ -81,6 +119,7 @@ def main_menu():
         "keyboard": [
             [{"text": "🔎 چند روز تا کنکور؟"}],
             [{"text": "📖 برنامه‌ریزی"}],
+            [{"text": "🔔 بهم یادآوری کن!"}],
         ],
         "resize_keyboard": True,
     }
@@ -108,6 +147,38 @@ def study_menu():
         "resize_keyboard": True,
     }
 
+# مدیریت یادآوری
+def manage_reminders(chat_id: int):
+    """منوی مدیریت یادآوری"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "✅ فعال کردن یادآوری", "callback_data": "reminder_enable"}],
+            [{"text": "❌ غیرفعال کردن یادآوری", "callback_data": "reminder_disable"}],
+            [{"text": "🕐 تنظیم زمان یادآوری", "callback_data": "reminder_set_time"}],
+            [{"text": "📝 انتخاب کنکورها", "callback_data": "reminder_select_exams"}],
+            [{"text": "📋 مشاهده تنظیمات", "callback_data": "reminder_show_settings"}]
+        ]
+    }
+    
+    send_message(chat_id, "🔔 مدیریت یادآوری روزانه:", reply_markup=keyboard)
+
+# ارسال یادآوری به کاربر
+def send_reminder_to_user(chat_id: int):
+    """ارسال یادآوری کنکور به کاربر خاص"""
+    if chat_id not in user_reminders or not user_reminders[chat_id].get("enabled", False):
+        return
+    
+    user_exams = user_reminders[chat_id].get("exams", [])
+    if not user_exams:
+        return
+    
+    reminder_text = "⏰ یادآوری روزانه کنکور:\n\n"
+    for exam_name in user_exams:
+        if exam_name in EXAMS:
+            reminder_text += get_countdown(exam_name) + "\n\n"
+    
+    send_message(chat_id, reminder_text)
+
 # محاسبه تایمر
 def get_countdown(exam_name: str):
     exams = EXAMS[exam_name]
@@ -126,7 +197,7 @@ def get_countdown(exam_name: str):
 
             results.append(
                 f"⏳ کنکور <b>{exam_name}</b>\n"
-                f"📅 تاریخ: {exam['date'].strftime('%d %B %Y')} (شمسی: {exam['date']})\n"
+                f"📅 تاریخ: {exam['date'].strftime('%d %B %Y')}\n"
                 f"🕗 ساعت شروع: {exam['time']}\n"
                 f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} دقیقه\n"
             )
@@ -142,6 +213,9 @@ def handle_message(chat_id: int, text: str):
 
     elif text == "📖 برنامه‌ریزی":
         send_message(chat_id, "📖 بخش برنامه‌ریزی:", reply_markup=study_menu())
+
+    elif text == "🔔 بهم یادآوری کن!":
+        manage_reminders(chat_id)
 
     elif text == "➕ ثبت مطالعه":
         send_message(
@@ -176,6 +250,16 @@ def handle_message(chat_id: int, text: str):
     elif text == "⬅️ بازگشت":
         send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
+    elif text.count(":") == 1 and len(text) == 5 and text.replace(":", "").isdigit():
+        # مدیریت زمان یادآوری
+        if chat_id not in user_reminders:
+            user_reminders[chat_id] = {"enabled": True, "time": text, "exams": []}
+        else:
+            user_reminders[chat_id]["time"] = text
+        
+        send_message(chat_id, f"✅ زمان یادآوری روی {text} تنظیم شد")
+        save_backup()
+
     elif text.startswith("🧪"):
         send_message(chat_id, get_countdown("تجربی"))
     elif text.startswith("📐"):
@@ -200,13 +284,84 @@ def handle_message(chat_id: int, text: str):
                     {"subject": subject, "start": start_time, "end": end_time, "duration": duration}
                 )
                 send_message(chat_id, f"✅ مطالعه {subject} از {start_time} تا {end_time} به مدت {duration} ساعت ثبت شد.")
+                save_backup()
             else:
                 send_message(chat_id, "❌ فرمت اشتباه است. لطفاً دوباره وارد کن.")
         except Exception as e:
             logger.error(f"Study parse error: {e}")
             send_message(chat_id, "⚠️ مشکلی در ثبت پیش آمد. دوباره امتحان کن.")
 
-# هندل دکمه حذف
+# هندل callback queries
+def handle_callback_query(chat_id: int, callback_data: str, callback_id: str):
+    if callback_data.startswith("delete_"):
+        idx = int(callback_data.split("_")[1])
+        if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
+            removed = user_study[chat_id].pop(idx)
+            send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
+            save_backup()
+        answer_callback_query(callback_id, "حذف شد ✅")
+
+    elif callback_data == "reminder_enable":
+        if chat_id not in user_reminders:
+            user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
+        else:
+            user_reminders[chat_id]["enabled"] = True
+        answer_callback_query(callback_id, "یادآوری فعال شد ✅")
+        send_message(chat_id, "✅ یادآوری روزانه فعال شد")
+        save_backup()
+
+    elif callback_data == "reminder_disable":
+        if chat_id in user_reminders:
+            user_reminders[chat_id]["enabled"] = False
+        answer_callback_query(callback_id, "یادآوری غیرفعال شد ❌")
+        send_message(chat_id, "❌ یادآوری روزانه غیرفعال شد")
+        save_backup()
+
+    elif callback_data == "reminder_set_time":
+        send_message(chat_id, "⏰ لطفاً زمان یادآوری را به فرمت HH:MM وارد کنید (مثلاً 08:00):")
+
+    elif callback_data == "reminder_select_exams":
+        exam_keyboard = {
+            "inline_keyboard": [
+                [{"text": "🧪 تجربی", "callback_data": "rem_exam_تجربی"}],
+                [{"text": "📐 ریاضی", "callback_data": "rem_exam_ریاضی"}],
+                [{"text": "📚 انسانی", "callback_data": "rem_exam_انسانی"}],
+                [{"text": "🎨 هنر", "callback_data": "rem_exam_هنر"}],
+                [{"text": "🏫 فرهنگیان", "callback_data": "rem_exam_فرهنگیان"}],
+                [{"text": "✅ تایید انتخاب", "callback_data": "rem_exam_done"}]
+            ]
+        }
+        send_message(chat_id, "📝 کنکورهای مورد نظر برای یادآوری را انتخاب کنید:", reply_markup=exam_keyboard)
+
+    elif callback_data == "reminder_show_settings":
+        if chat_id in user_reminders and user_reminders[chat_id].get("enabled", False):
+            settings = user_reminders[chat_id]
+            exams_text = ", ".join(settings.get("exams", [])) or "هیچکدام"
+            text = f"🔧 تنظیمات یادآوری:\n\n⏰ زمان: {settings.get('time', '08:00')}\n📚 کنکورها: {exams_text}\n✅ وضعیت: فعال"
+        else:
+            text = "🔕 یادآوری غیرفعال است"
+        send_message(chat_id, text)
+
+    elif callback_data.startswith("rem_exam_"):
+        exam_name = callback_data.replace("rem_exam_", "")
+        if chat_id not in user_reminders:
+            user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
+        
+        if exam_name in user_reminders[chat_id].get("exams", []):
+            user_reminders[chat_id]["exams"].remove(exam_name)
+            answer_callback_query(callback_id, f"حذف شد: {exam_name}")
+        else:
+            if "exams" not in user_reminders[chat_id]:
+                user_reminders[chat_id]["exams"] = []
+            user_reminders[chat_id]["exams"].append(exam_name)
+            answer_callback_query(callback_id, f"اضافه شد: {exam_name}")
+        save_backup()
+
+    elif callback_data == "rem_exam_done":
+        answer_callback_query(callback_id, "انتخاب کنکورها تکمیل شد ✅")
+        send_message(chat_id, "✅ کنکورهای مورد نظر برای یادآوری ثبت شدند")
+
+# وب‌هوک
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
 def webhook():
     try:
@@ -217,20 +372,36 @@ def webhook():
             cq = data["callback_query"]
             chat_id = cq["message"]["chat"]["id"]
             cq_data = cq["data"]
-            if cq_data.startswith("delete_"):
-                idx = int(cq_data.split("_")[1])
-                if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
-                    removed = user_study[chat_id].pop(idx)
-                    send_message(chat_id, f"🗑️ مطالعه {removed['subject']} حذف شد.")
-                answer_callback_query(cq["id"], "حذف شد ✅")
+            handle_callback_query(chat_id, cq_data, cq["id"])
 
         elif "message" in data:
             chat_id = data["message"]["chat"]["id"]
             text = data["message"].get("text", "")
             handle_message(chat_id, text)
+            
     except Exception as e:
         logger.error(f"webhook error: {e}")
     return "ok"
+
+# تابع ارسال یادآوری روزانه
+def send_daily_reminders():
+    """ارسال یادآوری روزانه به همه کاربران"""
+    try:
+        now = jdatetime.datetime.now().strftime("%H:%M")
+        logger.info(f"🔔 Checking reminders at {now}")
+        
+        for chat_id, settings in user_reminders.items():
+            if settings.get("enabled", False) and settings.get("time", "") == now and settings.get("exams"):
+                logger.info(f"Sending reminder to {chat_id}")
+                send_reminder_to_user(chat_id)
+                
+    except Exception as e:
+        logger.error(f"Reminder error: {e}")
+
+# scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_daily_reminders, 'interval', minutes=1)
+scheduler.start()
 
 # ست وبهوک
 @app.route("/set_webhook")
@@ -243,4 +414,8 @@ def set_webhook():
     return resp.text
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    try:
+        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    finally:
+        scheduler.shutdown()
+        save_backup()
