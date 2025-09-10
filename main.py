@@ -267,12 +267,13 @@ def edit_message(chat_id: int, message_id: int, text: str, reply_markup: dict | 
         logger.error(f"Unexpected error in edit_message: {e}")
         return False
 
-# پاسخ به callback_query
+# پاسخ به callback_query - اینجا خطا برطرف شد
 def answer_callback_query(callback_query_id, text=""):
     payload = {"callback_query_id": callback_query_id}
     if text:
-        payload["text": text,
+        payload["text"] = text
         payload["show_alert"] = False
+    
     try:
         resp = requests.post(f"{TELEGRAM_API}/answerCallbackQuery", data=payload, timeout=10)
         resp.raise_for_status()
