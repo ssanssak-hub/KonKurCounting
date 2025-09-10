@@ -223,6 +223,33 @@ def delete_user_study(chat_id, index=None):
         logger.error(f"Delete study error: {e}")
         return False
 
+def delete_all_user_data(chat_id):
+    """حذف تمام اطلاعات کاربر از دیتابیس"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # حذف اطلاعات مطالعه
+            cursor.execute("DELETE FROM user_study WHERE chat_id = ?", (chat_id,))
+            
+            # حذف اطلاعات یادآوری
+            cursor.execute("DELETE FROM user_reminders WHERE chat_id = ?", (chat_id,))
+            
+            conn.commit()
+            
+            # به‌روزرسانی داده‌های در حافظه
+            if chat_id in user_study:
+                del user_study[chat_id]
+            if chat_id in user_reminders:
+                del user_reminders[chat_id]
+                
+            logger.info(f"✅ All data deleted for user {chat_id}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Delete all user data error: {e}")
+        return False
+
 # مقداردهی اولیه دیتابیس
 init_db()
 load_user_data()
@@ -267,7 +294,7 @@ def edit_message(chat_id: int, message_id: int, text: str, reply_markup: dict | 
         logger.error(f"Unexpected error in edit_message: {e}")
         return False
 
-# پاسخ به callback_query - اینجا خطا برطرف شد
+# پاسخ به callback_query
 def answer_callback_query(callback_query_id, text=""):
     payload = {"callback_query_id": callback_query_id}
     if text:
@@ -289,10 +316,27 @@ def main_menu():
             [{"text": "🔎 چند روز تا کنکور؟"}],
             [{"text": "📖 برنامه‌ریزی"}],
             [{"text": "🔔 بهم یادآوری کن!"}],
+            [{"text": "🗑️ حذف اطلاعات"}],
             [{"text": "🔄 ریستارت ربات"}],
         ],
         "resize_keyboard": True,
     }
+
+# اینلاین کیبورد برای تأیید حذف اطلاعات
+def get_delete_confirmation_keyboard():
+    """ایجاد کیبورد اینلاین برای تأیید حذف اطلاعات"""
+    keyboard = [
+        [{
+            "text": "✅ بله، همه اطلاعات را حذف کن",
+            "callback_data": "confirm_delete_yes"
+        }],
+        [{
+            "text": "❌ خیر، انصراف",
+            "callback_data": "confirm_delete_no"
+        }]
+    ]
+    
+    return keyboard
 
 # کیبورد انتخاب کنکور
 def exam_menu():
@@ -413,7 +457,7 @@ def get_days_inline_keyboard(chat_id):
     
     return keyboard
 
-# اینلاین کیبورد برای انتخاب زمان
+# اینلاین کیبورد برای انتخاب زمان (از 00 تا 23)
 def get_time_inline_keyboard(chat_id):
     """ایجاد کیبورد اینلاین برای انتخاب زمان"""
     current_time = user_reminders.get(chat_id, {}).get("time", "08:00")
@@ -503,7 +547,7 @@ def send_reminder_to_user(chat_id: int):
     """ارسال یادآوری کنکور به کاربر خاص"""
     try:
         if chat_id not in user_reminders:
-            logger.warning(f"User {chat_id not found in reminders")
+            logger.warning(f"User {chat_id} not found in reminders")
             return False
         
         settings = user_reminders[chat_id]
@@ -536,7 +580,7 @@ def send_reminder_to_user(chat_id: int):
         logger.error(f"Error in send_reminder_to_user for {chat_id}: {e}")
         return False
 
-# محاسبه تایمر
+# محاسبه تایмер
 def get_countdown(exam_name: str):
     exams = EXAMS[exam_name]
     results = []
@@ -572,7 +616,7 @@ def get_iran_time():
 
 # تابع ارسال یادآوری روزانه
 def send_daily_reminders():
-    """ارسان یادآوری روزانه به همه کاربران"""
+    """ارسال یادآوری روزانه به همه کاربران"""
     try:
         now_iran = get_iran_time()
         logger.info(f"🔔 Checking reminders at Iran time: {now_iran}")
@@ -696,6 +740,11 @@ def handle_delete_study(chat_id: int):
             inline_kb = [[{"text": "❌ حذف", "callback_data": f"delete_{idx}"}]]
             send_message(chat_id, msg, {"inline_keyboard": inline_kb})
 
+def handle_delete_data(chat_id: int):
+    """مدیریت حذف اطلاعات"""
+    text = "⚠️ <b>حذف همه اطلاعات</b>\n\nآیا مطمئن هستید که می‌خواهید همه اطلاعات خود را حذف کنید؟\n\nاین عمل شامل تمام اطلاعات مطالعه و تنظیمات یادآوری شما می‌شود و غیرقابل بازگشت است!"
+    send_message(chat_id, text, {"inline_keyboard": get_delete_confirmation_keyboard()})
+
 # ذخیره message_id برای ویرایش پیام
 user_message_ids = {}
 
@@ -757,7 +806,7 @@ def handle_reminder_exam_callback(chat_id: int, exam_name: str, message_id: int)
     
     save_user_reminder(chat_id, user_reminders[chat_id])
     
-    # ویرایش پیام با کیبورد更新 شده
+    # ویرایش پیام با کیبورد به‌روز شده
     text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
     edit_message(chat_id, message_id, text, {"inline_keyboard": get_exam_inline_keyboard(chat_id)})
 
@@ -780,7 +829,7 @@ def handle_reminder_day_callback(chat_id: int, day_name: str, message_id: int):
     
     save_user_reminder(chat_id, user_reminders[chat_id])
     
-    # ویرایش پیام با کیبورد更新 شده
+    # ویرایش پیام با کیبورد به‌روز شده
     text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
     edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
 
@@ -799,7 +848,7 @@ def handle_reminder_time_callback(chat_id: int, time_type: str, value: str, mess
     user_reminders[chat_id]["time"] = f"{current_time[0]}:{current_time[1]}"
     save_user_reminder(chat_id, user_reminders[chat_id])
     
-    # ویرایش پیام با کیبورد更新 شده
+    # ویرایش پیام با کیبورد به‌روز شده
     text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
     edit_message(chat_id, message_id, text, {"inline_keyboard": get_time_inline_keyboard(chat_id)})
 
@@ -823,15 +872,28 @@ def handle_reminder_status_callback(chat_id: int, status: str, message_id: int):
     save_user_reminder(chat_id, user_reminders[chat_id])
     
     if status != "save":
-        # ویرایش پیام با کیبورد更新 شده
+        # ویرایش پیام با کیبورد به‌روز شده
         text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
         edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
     else:
         # حذف پیام و ارسال پیام جدید
-        edit_message(chat_id, message_id, "✅ تنظیمات یادآوری شما با موفقیت ذخیره شد.")
+        edit_message(chat_id, message_id, "✅ تنظیمات یادآوری شما با успеیت ذخیره شد.")
         if chat_id in user_message_ids:
             del user_message_ids[chat_id]
         send_message(chat_id, message, reply_markup=main_menu())
+
+def handle_delete_confirmation(chat_id: int, confirm: bool, message_id: int):
+    """مدیریت تأیید حذف اطلاعات"""
+    if confirm:
+        if delete_all_user_data(chat_id):
+            text = "✅ همه اطلاعات شما با موفقیت حذف شد."
+        else:
+            text = "❌ خطایی در حذف اطلاعات رخ داد."
+    else:
+        text = "✅ عمل حذف اطلاعات لغو شد."
+    
+    edit_message(chat_id, message_id, text)
+    send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
@@ -843,6 +905,7 @@ def handle_message(chat_id: int, text: str):
         "🔎 چند روز تا کنکور؟": handle_countdown,
         "📖 برنامه‌ریزی": handle_study,
         "🔔 بهم یادآوری کن!": handle_reminder,
+        "🗑️ حذف اطلاعات": handle_delete_data,
         "➕ ثبت مطالعه": handle_add_study,
         "📊 مشاهده پیشرفت": handle_view_progress,
         "🗑️ حذف مطالعه": handle_delete_study,
@@ -940,6 +1003,12 @@ def handle_callback_query(chat_id: int, callback_data: str, callback_id: int, me
                 del user_message_ids[chat_id]
             send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
             
+        elif callback_data == "confirm_delete_yes":
+            handle_delete_confirmation(chat_id, True, message_id)
+            
+        elif callback_data == "confirm_delete_no":
+            handle_delete_confirmation(chat_id, False, message_id)
+            
         elif callback_data.startswith("delete_"):
             idx = int(callback_data.split("_")[1])
             if chat_id in user_study and 0 <= idx < len(user_study[chat_id]):
@@ -991,7 +1060,7 @@ scheduler.start()
 # ست وبهوک
 @app.route("/set_webhook")
 def set_webhook():
-    url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXternal_URL")
     if not url:
         return "❌ PUBLIC_URL or RENDER_EXTERNAL_URL not set"
     wh_url = f"{url}/webhook/{TOKEN}"
@@ -1004,7 +1073,7 @@ def set_webhook():
 if __name__ == "__main__":
     try:
         logger.info("🤖 Bot started successfully!")
-        logger.info(f"🕒 Current Iran time: {get_iran_time()})
+        logger.info(f"🕒 Current Iran time: {get_iran_time()}")
         logger.info(f"👥 Total users with reminders: {len(user_reminders)}")
         
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
