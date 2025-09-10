@@ -6,7 +6,7 @@ import jdatetime
 import requests
 import pickle
 import atexit
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -175,19 +175,24 @@ def reminder_exam_menu():
 # ارسال یادآوری به کاربر
 def send_reminder_to_user(chat_id: int):
     """ارسال یادآوری کنکور به کاربر خاص"""
-    if chat_id not in user_reminders or not user_reminders[chat_id].get("enabled", False):
-        return
-    
-    user_exams = user_reminders[chat_id].get("exams", [])
-    if not user_exams:
-        return
-    
-    reminder_text = "⏰ یادآوری روزانه کنکور:\n\n"
-    for exam_name in user_exams:
-        if exam_name in EXAMS:
-            reminder_text += get_countdown(exam_name) + "\n\n"
-    
-    send_message(chat_id, reminder_text)
+    try:
+        if chat_id not in user_reminders or not user_reminders[chat_id].get("enabled", False):
+            return
+        
+        user_exams = user_reminders[chat_id].get("exams", [])
+        if not user_exams:
+            return
+        
+        reminder_text = "⏰ یادآوری روزانه کنکور:\n\n"
+        for exam_name in user_exams:
+            if exam_name in EXAMS:
+                reminder_text += get_countdown(exam_name) + "\n\n"
+        
+        send_message(chat_id, reminder_text)
+        logger.info(f"✅ یادآوری ارسال شد به کاربر {chat_id}")
+        
+    except Exception as e:
+        logger.error(f"Error in send_reminder_to_user: {e}")
 
 # محاسبه تایمر
 def get_countdown(exam_name: str):
@@ -213,6 +218,44 @@ def get_countdown(exam_name: str):
             )
     return "\n".join(results)
 
+# تابع برای گرفتن زمان ایران
+def get_iran_time():
+    """دریافت زمان فعلی ایران"""
+    try:
+        # زمان UTC
+        utc_now = datetime.utcnow()
+        # تبدیل به زمان ایران (UTC+3:30)
+        iran_offset = timedelta(hours=3, minutes=30)
+        iran_time = utc_now + iran_offset
+        return iran_time.strftime("%H:%M")
+    except Exception as e:
+        logger.error(f"Error getting Iran time: {e}")
+        return datetime.now().strftime("%H:%M")
+
+# تابع ارسال یادآوری روزانه
+def send_daily_reminders():
+    """ارسال یادآوری روزانه به همه کاربران"""
+    try:
+        now_iran = get_iran_time()
+        logger.info(f"🔔 Checking reminders at Iran time: {now_iran}")
+        
+        active_reminders = 0
+        for chat_id, settings in user_reminders.items():
+            if (settings.get("enabled", False) and 
+                settings.get("time", "") == now_iran and 
+                settings.get("exams")):
+                
+                logger.info(f"⏰ Sending reminder to {chat_id} at {now_iran}")
+                send_reminder_to_user(chat_id)
+                active_reminders += 1
+                # تاخیر کوچک بین ارسال به کاربران مختلف
+                time.sleep(1)
+        
+        logger.info(f"✅ Sent reminders to {active_reminders} users")
+                
+    except Exception as e:
+        logger.error(f"Reminder error: {e}")
+
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
     if text in ["شروع", "/start"]:
@@ -227,7 +270,7 @@ def handle_message(chat_id: int, text: str):
     elif text == "🔔 بهم یادآوری کن!":
         send_message(chat_id, "🔔 مدیریت یادآوری روزانه:", reply_markup=reminder_menu())
 
-    # مدیریت منوی یادآوری - باید قبل از منوی برنامه‌ریزی باشد
+    # مدیریت منوی یادآوری
     elif text == "✅ فعال کردن یادآوری":
         if chat_id not in user_reminders:
             user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
@@ -243,7 +286,8 @@ def handle_message(chat_id: int, text: str):
         save_backup()
 
     elif text == "🕐 تنظیم زمان یادآوری":
-        send_message(chat_id, "⏰ لطفاً زمان یادآوری را به فرمت HH:MM وارد کنید (مثلاً 08:00):", reply_markup=reminder_menu())
+        current_time = user_reminders.get(chat_id, {}).get("time", "08:00")
+        send_message(chat_id, f"⏰ زمان فعلی یادآوری: {current_time}\nلطفاً زمان جدید را به فرمت HH:MM وارد کنید (مثلاً 08:00):", reply_markup=reminder_menu())
 
     elif text == "📝 انتخاب کنکورها":
         send_message(chat_id, "📝 کنکورهای مورد نظر برای یادآوری را انتخاب کنید:", reply_markup=reminder_exam_menu())
@@ -261,11 +305,9 @@ def handle_message(chat_id: int, text: str):
         send_message(chat_id, "✅ کنکورهای مورد نظر برای یادآوری ثبت شدند", reply_markup=reminder_menu())
         save_backup()
 
-    # مدیریت انتخاب کنکورها برای یادآوری - باید قبل از منوی کنکور اصلی باشد
+    # مدیریت انتخاب کنکورها برای یادآوری
     elif text in ["🧪 تجربی", "📐 ریاضی", "📚 انسانی", "🎨 هنر", "🏫 فرهنگیان"]:
-        # فقط اگر در منوی انتخاب کنکورهای یادآوری باشیم
-        exam_name = text.split(" ")[0] if " " in text else text
-        exam_name = exam_name.replace("🧪", "تجربی").replace("📐", "ریاضی").replace("📚", "انسانی").replace("🎨", "هنر").replace("🏫", "فرهنگیان")
+        exam_name = text.replace("🧪", "تجربی").replace("📐", "ریاضی").replace("📚", "انسانی").replace("🎨", "هنر").replace("🏫", "فرهنگیان")
         
         if chat_id not in user_reminders:
             user_reminders[chat_id] = {"enabled": True, "time": "08:00", "exams": []}
@@ -388,21 +430,6 @@ def webhook():
         logger.error(f"webhook error: {e}")
     return "ok"
 
-# تابع ارسال یادآوری روزانه
-def send_daily_reminders():
-    """ارسال یادآوری روزانه به همه کاربران"""
-    try:
-        now = jdatetime.datetime.now().strftime("%H:%M")
-        logger.info(f"🔔 Checking reminders at {now}")
-        
-        for chat_id, settings in user_reminders.items():
-            if settings.get("enabled", False) and settings.get("time", "") == now and settings.get("exams"):
-                logger.info(f"Sending reminder to {chat_id}")
-                send_reminder_to_user(chat_id)
-                
-    except Exception as e:
-        logger.error(f"Reminder error: {e}")
-
 # scheduler
 scheduler = BackgroundScheduler()
 scheduler.add_job(send_daily_reminders, 'interval', minutes=1)
@@ -420,6 +447,11 @@ def set_webhook():
 
 if __name__ == "__main__":
     try:
+        # تست یادآوری بلافاصله بعد از راه‌اندازی
+        logger.info("🤖 Bot started successfully!")
+        logger.info(f"🕒 Current Iran time: {get_iran_time()}")
+        logger.info(f"👥 Total users with reminders: {len(user_reminders)}")
+        
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
     finally:
         scheduler.shutdown()
