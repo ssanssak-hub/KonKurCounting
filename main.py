@@ -6,8 +6,6 @@ import jdatetime
 import requests
 import pickle
 import atexit
-import sys
-import subprocess
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -130,17 +128,6 @@ def main_menu():
             [{"text": "📖 برنامه‌ریزی"}],
             [{"text": "🔔 بهم یادآوری کن!"}],
             [{"text": "🔄 ریستارت ربات"}],
-        ],
-        "resize_keyboard": True,
-    }
-
-# کیبورد تأیید ریستارت
-def restart_confirmation_menu():
-    return {
-        "keyboard": [
-            [{"text": "✅ بله، ریستارت کن"}],
-            [{"text": "❌ خیر، انصراف"}],
-            [{"text": "⬅️ بازگشت"}],
         ],
         "resize_keyboard": True,
     }
@@ -384,28 +371,38 @@ def remove_all_exams_from_reminders(chat_id: int):
     save_backup()
     return True
 
-# تابع ریستارت ربات (نسخه بهبود یافته)
-def restart_bot(chat_id: int):
-    """ریستارت کردن ربات و اطلاع به کاربر"""
+# تابع ریستارت (شبیه به /start)
+def restart_bot_for_user(chat_id: int):
+    """ریستارت ربات برای کاربر - عملکرد شبیه به /start"""
     try:
-        logger.info("🔄 Restarting bot...")
-        send_message(chat_id, "🔄 ربات در حال راه‌اندازی مجدد است... لطفاً چند لحظه صبر کنید.")
+        # پاک کردن داده‌های کاربر (اختیاری - می‌توانید این بخش را حذف کنید اگر نمی‌خواهید داده‌ها پاک شوند)
+        # if chat_id in user_study:
+        #     del user_study[chat_id]
+        # if chat_id in user_reminders:
+        #     del user_reminders[chat_id]
+        # save_backup()
         
-        # ذخیره داده‌ها قبل از ریستارت
-        save_backup()
-        
-        # راه‌اندازی مجدد با استفاده از subprocess
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
+        # ارسال پیام خوش‌آمدگویی مجدد
+        send_message(
+            chat_id,
+            "🔄 ربات با موفقیت ریستارت شد!\n\n"
+            "سلام 👋 دوباره به ربات کنکور خوش آمدید!\n"
+            "یک گزینه رو انتخاب کن:",
+            reply_markup=main_menu()
+        )
+        logger.info(f"✅ Bot restarted for user {chat_id}")
         
     except Exception as e:
-        logger.error(f"❌ Error restarting bot: {e}")
-        send_message(chat_id, "❌ خطا در ریستارت ربات. لطفاً بعداً تلاش کنید.", reply_markup=main_menu())
+        logger.error(f"❌ Error in restart_bot_for_user: {e}")
+        send_message(chat_id, "⚠️ خطایی در ریستارت ربات occurred. لطفاً دوباره تلاش کنید.", reply_markup=main_menu())
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, text: str):
-    if text in ["شروع", "/start"]:
-        send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
+    if text in ["شروع", "/start", "🔄 ریستارت ربات"]:
+        if text == "🔄 ریستارت ربات":
+            restart_bot_for_user(chat_id)
+        else:
+            send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
 
     elif text == "🔎 چند روز تا کنکور؟":
         send_message(chat_id, "یک کنکور رو انتخاب کن:", reply_markup=exam_menu())
@@ -415,26 +412,6 @@ def handle_message(chat_id: int, text: str):
 
     elif text == "🔔 بهم یادآوری کن!":
         send_message(chat_id, "🔔 مدیریت یادآوری روزانه:", reply_markup=reminder_menu())
-
-    elif text == "🔄 ریستارت ربات":
-        send_message(
-            chat_id,
-            "⚠️ آیا مطمئن هستید که می‌خواهید ربات را ریستارت کنید؟\n\n"
-            "این عمل باعث راه‌اندازی مجدد ربات می‌شود.",
-            reply_markup=restart_confirmation_menu()
-        )
-
-    elif text == "✅ بله، ریستارت کن":
-        # ارسال پیام تأیید و سپس ریستارت
-        send_message(chat_id, "⏳ در حال ریستارت ربات...")
-        time.sleep(1)
-        restart_bot(chat_id)
-
-    elif text == "❌ خیر، انصراف":
-        send_message(chat_id, "✅ عمل ریستارت لغو شد.", reply_markup=main_menu())
-
-    elif text == "⬅️ بازگشت":
-        send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
 
     # مدیریت منوی یادآوری
     elif text == "✅ فعال کردن یادآوری":
@@ -558,6 +535,9 @@ def handle_message(chat_id: int, text: str):
                 inline_kb = [[{"text": "❌ حذف", "callback_data": f"delete_{idx}"}]]
                 send_message_inline(chat_id, msg, inline_kb)
 
+    elif text == "⬅️ بازگشت":
+        send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
+
     elif text.count(":") == 1 and len(text) == 5 and text.replace(":", "").isdigit():
         # مدیریت زمان یادآوری
         if chat_id not in user_reminders:
@@ -643,7 +623,7 @@ def set_webhook():
     url = os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL")
     if not url:
         return "❌ PUBLIC_URL or RENDER_EXTERNAL_URL not set"
-    wh_url = f"{url}/webhook/{TOKEN}"
+    wh_url = f"{url}/webhook/{TOKEN}
     resp = requests.get(f"{TELEGRAM_API}/setWebhook?url={wh_url}")
     return resp.text
 
