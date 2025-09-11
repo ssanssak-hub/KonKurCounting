@@ -361,7 +361,33 @@ def study_menu():
         "resize_keyboard": True,
     }
 
-# اینلاین کیبورد برای انتخاب کنکورها
+# اینلاین کیبورد برای مدیریت وضعیت یادآوری (مرحله اول)
+def get_status_inline_keyboard(chat_id):
+    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری (مرحله اول)"""
+    is_enabled = user_reminders.get(chat_id, {}).get("enabled", False)
+    
+    keyboard = [
+        [{
+            "text": f"{'✅' if is_enabled else '🔲'} فعال کردن یادآوری",
+            "callback_data": "reminder_status_enable"
+        }],
+        [{
+            "text": f"{'✅' if not is_enabled else '🔲'} غیرفعال کردن یادآوری",
+            "callback_data": "reminder_status_disable"
+        }],
+        [{
+            "text": "⏭️ مرحله بعد (انتخاب کنکور)",
+            "callback_data": "reminder_next_exams"
+        }],
+        [{
+            "text": "⬅️ بازگشت به منوی اصلی",
+            "callback_data": "reminder_back_main"
+        }]
+    ]
+    
+    return keyboard
+
+# اینلاین کیبورد برای انتخاب کنکورها (مرحله دوم)
 def get_exam_inline_keyboard(chat_id):
     """ایجاد کیبورد اینلاین برای انتخاب کنکورها"""
     selected_exams = user_reminders.get(chat_id, {}).get("exams", [])
@@ -396,68 +422,18 @@ def get_exam_inline_keyboard(chat_id):
             "callback_data": "reminder_exam_none"
         }],
         [{
-            "text": "⏭️ مرحله بعد (انتخاب روزها)",
-            "callback_data": "reminder_next_days"
-        }],
-        [{
-            "text": "⬅️ بازگشت به منوی اصلی",
-            "callback_data": "reminder_back_main"
-        }]
-    ]
-    
-    return keyboard
-
-# اینلاین کیبورد برای انتخاب روزهای هفته
-def get_days_inline_keyboard(chat_id):
-    """ایجاد کیبورد اینلاین برای انتخاب روزهای هفته"""
-    selected_days = user_reminders.get(chat_id, {}).get("days", [])
-    
-    keyboard = [
-        [{
-            "text": f"{'✅' if 'شنبه' in selected_days else '🔲'} شنبه",
-            "callback_data": "reminder_day_شنبه"
-        }],
-        [{
-            "text": f"{'✅' if 'یکشنبه' in selected_days else '🔲'} یکشنبه",
-            "callback_data": "reminder_day_یکشنبه"
-        }],
-        [{
-            "text": f"{'✅' if 'دوشنبه' in selected_days else '🔲'} دوشنبه",
-            "callback_data": "reminder_day_دوشنبه"
-        }],
-        [{
-            "text": f"{'✅' if 'سهشنبه' in selected_days else '🔲'} سهشنبه",
-            "callback_data": "reminder_day_سهشنبه"
-        }],
-        [{
-            "text": f"{'✅' if 'چهارشنبه' in selected_days else '🔲'} چهارشنبه",
-            "callback_data": "reminder_day_چهارشنبه"
-        }],
-        [{
-            "text": f"{'✅' if 'پنجشنبه' in selected_days else '🔲'} پنجشنبه",
-            "callback_data": "reminder_day_پنجشنبه"
-        }],
-        [{
-            "text": f"{'✅' if 'جمعه' in selected_days else '🔲'} جمعه",
-            "callback_data": "reminder_day_جمعه"
-        }],
-        [{
-            "text": "✅ همه روزها",
-            "callback_data": "reminder_day_all"
-        }],
-        [{
             "text": "⏭️ مرحله بعد (تنظیم زمان)",
             "callback_data": "reminder_next_time"
         }],
         [{
-            "text": "⬅️ بازگشت به انتخاب کنکور",
-            "callback_data": "reminder_back_exams"
+            "text": "⬅️ بازگشت به وضعیت",
+            "callback_data": "reminder_back_status"
         }]
     ]
     
     return keyboard
 
-# اینلاین کیبورد برای انتخاب زمان (از 00 تا 23)
+# اینلاین کیبورد برای انتخاب زمان (از 00 تا 23) (مرحله سوم)
 def get_time_inline_keyboard(chat_id):
     """ایجاد کیبورد اینلاین برای انتخاب زمان"""
     current_time = user_reminders.get(chat_id, {}).get("time", "08:00")
@@ -501,20 +477,74 @@ def get_time_inline_keyboard(chat_id):
             "callback_data": "reminder_time_confirm"
         }],
         [{
-            "text": "⏭️ مرحله بعد (تنظیم وضعیت)",
-            "callback_data": "reminder_next_status"
+            "text": "⏭️ مرحله بعد (انتخاب روزها)",
+            "callback_data": "reminder_next_days"
         }],
         [{
-            "text": "⬅️ بازگشت به انتخاب روزها",
-            "callback_data": "reminder_back_days"
+            "text": "⬅️ بازگشت به انتخاب کنکور",
+            "callback_data": "reminder_back_exams"
         }]
     ])
     
     return keyboard
 
-# اینلاین کیبورد برای مدیریت وضعیت یادآوری
-def get_status_inline_keyboard(chat_id):
-    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری"""
+# اینلاین کیبورد برای انتخاب روزهای هفته (مرحله چهارم)
+def get_days_inline_keyboard(chat_id):
+    """ایجاد کیبورد اینلاین برای انتخاب روزهای هفته"""
+    selected_days = user_reminders.get(chat_id, {}).get("days", [])
+    
+    keyboard = [
+        [{
+            "text": f"{'✅' if 'شنبه' in selected_days else '🔲'} شنبه",
+            "callback_data": "reminder_day_شنبه"
+        }],
+        [{
+            "text": f"{'✅' if 'یکشنبه' in selected_days else '🔲'} یکشنبه",
+            "callback_data": "reminder_day_یکشنبه"
+        }],
+        [{
+            "text": f"{'✅' if 'دوشنبه' in selected_days else '🔲'} دوشنبه",
+            "callback_data": "reminder_day_دوشنبه"
+        }],
+        [{
+            "text": f"{'✅' if 'سهشنبه' in selected_days else '🔲'} سهشنبه",
+            "callback_data": "reminder_day_سهشنبه"
+        }],
+        [{
+            "text": f"{'✅' if 'چهارشنبه' in selected_days else '🔲'} چهارشنبه",
+            "callback_data": "reminder_day_چهارشنبه"
+        }],
+        [{
+            "text": f"{'✅' if 'پنجشنبه' in selected_days else '🔲'} پنجشنبه",
+            "callback_data": "reminder_day_پنجشنبه"
+        }],
+        [{
+            "text": f"{'✅' if 'جمعه' in selected_days else '🔲'} جمعه",
+            "callback_data": "reminder_day_جمعه"
+        }],
+        [{
+            "text": "✅ همه روزها",
+            "callback_data": "reminder_day_all"
+        }],
+        [{
+            "text": "❌ حذف همه",
+            "callback_data": "reminder_day_none"
+        }],
+        [{
+            "text": "✅ ذخیره و تکمیل تنظیمات",
+            "callback_data": "reminder_status_save"
+        }],
+        [{
+            "text": "⬅️ بازگشت به تنظیم زمان",
+            "callback_data": "reminder_back_time"
+        }]
+    ]
+    
+    return keyboard
+
+# اینلاین کیبورد برای مدیریت وضعیت یادآوری (مرحله نهایی)
+def get_final_status_inline_keyboard(chat_id):
+    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری (مرحله نهایی)"""
     is_enabled = user_reminders.get(chat_id, {}).get("enabled", False)
     
     keyboard = [
@@ -535,8 +565,8 @@ def get_status_inline_keyboard(chat_id):
             "callback_data": "reminder_status_save"
         }],
         [{
-            "text": "⬅️ بازگشت به تنظیم زمان",
-            "callback_data": "reminder_back_time"
+            "text": "⬅️ بازگشت به انتخاب روزها",
+            "callback_data": "reminder_back_days"
         }]
     ]
     
@@ -580,7 +610,7 @@ def send_reminder_to_user(chat_id: int):
         logger.error(f"Error in send_reminder_to_user for {chat_id}: {e}")
         return False
 
-# محاسبه تایмер
+# محاسبه تایمر
 def get_countdown(exam_name: str):
     exams = EXAMS[exam_name]
     results = []
@@ -649,6 +679,38 @@ def send_daily_reminders():
                 
     except Exception as e:
         logger.error(f"Reminder scheduler error: {e}")
+
+# تابع ارسال یادآوری خودکار
+def send_automatic_reminders():
+    """ارسال یادآوری خودکار ساعت 8 صبح و 10 شب"""
+    try:
+        now_iran = get_iran_time()
+        logger.info(f"🔔 Checking automatic reminders at Iran time: {now_iran}")
+        
+        # بررسی زمان (8 صبح یا 10 شب)
+        if now_iran in ["08:00", "22:00"]:
+            logger.info(f"⏰ Time for automatic reminder: {now_iran}")
+            
+            for chat_id, settings in user_reminders.items():
+                user_enabled = settings.get("enabled", False)
+                user_exams = settings.get("exams", [])
+                
+                if user_enabled and user_exams:
+                    logger.info(f"📨 Sending automatic reminder to {chat_id}")
+                    
+                    reminder_text = f"⏰ یادآوری { 'صبح' if now_iran == '08:00' else 'شب' }:\n\n"
+                    for exam_name in user_exams:
+                        if exam_name in EXAMS:
+                            reminder_text += get_countdown(exam_name) + "\n\n"
+                    
+                    if reminder_text != f"⏰ یادآوری { 'صبح' if now_iran == '08:00' else 'شب' }:\n\n":
+                        send_message(chat_id, reminder_text)
+                        time.sleep(0.5)  # تاخیر بین ارسال به کاربران مختلف
+                    
+            logger.info(f"✅ Sent automatic reminders at {now_iran}")
+                
+    except Exception as e:
+        logger.error(f"Automatic reminder scheduler error: {e}")
 
 # نمایش تنظیمات کاربر
 def show_user_settings(chat_id: int):
@@ -750,9 +812,9 @@ user_message_ids = {}
 
 def handle_reminder(chat_id: int):
     """مدیریت بخش یادآوری"""
-    # ارسال پیام با کیبورد اینلاین برای انتخاب کنکورها
-    text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
-    message_id = send_message(chat_id, text, {"inline_keyboard": get_exam_inline_keyboard(chat_id)})
+    # ارسال پیام با کیبورد اینلاین برای وضعیت
+    text = "🔔 مدیریت یادآوری:\n\nلطفاً ابتدا وضعیت یادآوری را انتخاب کنید:"
+    message_id = send_message(chat_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
     
     if message_id:
         user_message_ids[chat_id] = message_id
@@ -786,6 +848,27 @@ def handle_study_input(chat_id: int, text: str):
         send_message(chat_id, "⚠️ مشکلی در ثبت پیش آمد. دوباره امتحان کن.", reply_markup=study_menu())
 
 # هندلرهای callback
+def handle_reminder_status_callback(chat_id: int, status: str, message_id: int):
+    """مدیریت وضعیت یادآوری"""
+    if chat_id not in user_reminders:
+        user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
+    
+    if status == "enable":
+        user_reminders[chat_id]["enabled"] = True
+        message = "✅ یادآوری فعال شد"
+    elif status == "disable":
+        user_reminders[chat_id]["enabled"] = False
+        message = "❌ یادآوری غیرفعال شد"
+    elif status == "delete":
+        user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
+        message = "🗑️ همه تنظیمات یادآوری حذف شد"
+    
+    save_user_reminder(chat_id, user_reminders[chat_id])
+    
+    # ویرایش پیام با کیبورد به‌روز شده
+    text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
+    edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
+
 def handle_reminder_exam_callback(chat_id: int, exam_name: str, message_id: int):
     """مدیریت انتخاب کنکور در یادآوری"""
     if chat_id not in user_reminders:
@@ -807,31 +890,8 @@ def handle_reminder_exam_callback(chat_id: int, exam_name: str, message_id: int)
     save_user_reminder(chat_id, user_reminders[chat_id])
     
     # ویرایش پیام با کیبورد به‌روز شده
-    text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
+    text = "🔔 مدیریت یادآوری:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
     edit_message(chat_id, message_id, text, {"inline_keyboard": get_exam_inline_keyboard(chat_id)})
-
-def handle_reminder_day_callback(chat_id: int, day_name: str, message_id: int):
-    """مدیریت انتخاب روز در یادآوری"""
-    if chat_id not in user_reminders:
-        user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
-    
-    if day_name == "all":
-        # انتخاب همه روزها
-        user_reminders[chat_id]["days"] = ["همه روزها"]
-    elif day_name in user_reminders[chat_id]["days"]:
-        # حذف روز اگر قبلاً انتخاب شده
-        user_reminders[chat_id]["days"].remove(day_name)
-    else:
-        # افزودن روز
-        if "همه روزها" in user_reminders[chat_id]["days"]:
-            user_reminders[chat_id]["days"].remove("همه روزها")
-        user_reminders[chat_id]["days"].append(day_name)
-    
-    save_user_reminder(chat_id, user_reminders[chat_id])
-    
-    # ویرایش پیام با کیبورد به‌روز شده
-    text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
-    edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
 
 def handle_reminder_time_callback(chat_id: int, time_type: str, value: str, message_id: int):
     """مدیریت انتخاب زمان در یادآوری"""
@@ -849,11 +909,37 @@ def handle_reminder_time_callback(chat_id: int, time_type: str, value: str, mess
     save_user_reminder(chat_id, user_reminders[chat_id])
     
     # ویرایش پیام با کیبورد به‌روز شده
-    text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
+    text = "🔔 مدیریت یادآوری:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
     edit_message(chat_id, message_id, text, {"inline_keyboard": get_time_inline_keyboard(chat_id)})
 
-def handle_reminder_status_callback(chat_id: int, status: str, message_id: int):
-    """مدیریت وضعیت یادآوری"""
+def handle_reminder_day_callback(chat_id: int, day_name: str, message_id: int):
+    """مدیریت انتخاب روز در یادآوری"""
+    if chat_id not in user_reminders:
+        user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
+    
+    if day_name == "all":
+        # انتخاب همه روزها
+        user_reminders[chat_id]["days"] = ["همه روزها"]
+    elif day_name == "none":
+        # حذف همه روزها
+        user_reminders[chat_id]["days"] = []
+    elif day_name in user_reminders[chat_id]["days"]:
+        # حذف روز اگر قبلاً انتخاب شده
+        user_reminders[chat_id]["days"].remove(day_name)
+    else:
+        # افزودن روز
+        if "همه روزها" in user_reminders[chat_id]["days"]:
+            user_reminders[chat_id]["days"].remove("همه روزها")
+        user_reminders[chat_id]["days"].append(day_name)
+    
+    save_user_reminder(chat_id, user_reminders[chat_id])
+    
+    # ویرایش پیام با کیبورد به‌روز شده
+    text = "🔔 مدیریت یادآوری:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
+    edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
+
+def handle_reminder_final_callback(chat_id: int, status: str, message_id: int):
+    """مدیریت وضعیت نهایی یادآوری"""
     if chat_id not in user_reminders:
         user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
     
@@ -873,11 +959,11 @@ def handle_reminder_status_callback(chat_id: int, status: str, message_id: int):
     
     if status != "save":
         # ویرایش پیام با کیبورد به‌روز شده
-        text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
-        edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
+        text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
+        edit_message(chat_id, message_id, text, {"inline_keyboard": get_final_status_inline_keyboard(chat_id)})
     else:
         # حذف پیام و ارسال پیام جدید
-        edit_message(chat_id, message_id, "✅ تنظیمات یادآوری شما با успеیت ذخیره شد.")
+        edit_message(chat_id, message_id, "✅ تنظیمات یادآوری شما با موفقیت ذخیره شد.")
         if chat_id in user_message_ids:
             del user_message_ids[chat_id]
         send_message(chat_id, message, reply_markup=main_menu())
@@ -948,20 +1034,20 @@ def handle_callback_query(chat_id: int, callback_data: str, callback_id: int, me
         # پاسخ دادن به callback query
         answer_callback_query(callback_id)
         
-        if callback_data.startswith("reminder_exam_"):
+        if callback_data.startswith("reminder_status_"):
+            status = callback_data.replace("reminder_status_", "")
+            handle_reminder_status_callback(chat_id, status, message_id)
+            
+        elif callback_data == "reminder_next_exams":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_exam_inline_keyboard(chat_id)})
+            
+        elif callback_data.startswith("reminder_exam_"):
             exam_name = callback_data.replace("reminder_exam_", "")
             handle_reminder_exam_callback(chat_id, exam_name, message_id)
             
-        elif callback_data == "reminder_next_days":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
-            edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
-            
-        elif callback_data.startswith("reminder_day_"):
-            day_name = callback_data.replace("reminder_day_", "")
-            handle_reminder_day_callback(chat_id, day_name, message_id)
-            
         elif callback_data == "reminder_next_time":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
             edit_message(chat_id, message_id, text, {"inline_keyboard": get_time_inline_keyboard(chat_id)})
             
         elif callback_data.startswith("reminder_hour_"):
@@ -973,28 +1059,40 @@ def handle_callback_query(chat_id: int, callback_data: str, callback_id: int, me
             handle_reminder_time_callback(chat_id, "minute", minute, message_id)
             
         elif callback_data == "reminder_time_confirm":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
-            edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
-            
-        elif callback_data == "reminder_next_status":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
-            edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
-            
-        elif callback_data.startswith("reminder_status_"):
-            status = callback_data.replace("reminder_status_", "")
-            handle_reminder_status_callback(chat_id, status, message_id)
-            
-        elif callback_data == "reminder_back_exams":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
-            edit_message(chat_id, message_id, text, {"inline_keyboard": get_exam_inline_keyboard(chat_id)})
-            
-        elif callback_data == "reminder_back_days":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
             edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
             
+        elif callback_data == "reminder_next_days":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
+            
+        elif callback_data.startswith("reminder_day_"):
+            day_name = callback_data.replace("reminder_day_", "")
+            handle_reminder_day_callback(chat_id, day_name, message_id)
+            
+        elif callback_data == "reminder_next_status":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت نهایی یادآوری را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_final_status_inline_keyboard(chat_id)})
+            
+        elif callback_data.startswith("reminder_final_"):
+            status = callback_data.replace("reminder_final_", "")
+            handle_reminder_final_callback(chat_id, status, message_id)
+            
+        elif callback_data == "reminder_back_status":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
+            
+        elif callback_data == "reminder_back_exams":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً کنکورهای مورد نظر خود را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_exam_inline_keyboard(chat_id)})
+            
         elif callback_data == "reminder_back_time":
-            text = "🔔 مدیریت یادآوری روزانه:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً زمان یادآوری را انتخاب کنید:"
             edit_message(chat_id, message_id, text, {"inline_keyboard": get_time_inline_keyboard(chat_id)})
+            
+        elif callback_data == "reminder_back_days":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً روزهای مورد نظر خود را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_days_inline_keyboard(chat_id)})
             
         elif callback_data == "reminder_back_main":
             # حذف پیام و بازگشت به منوی اصلی
@@ -1054,7 +1152,8 @@ def webhook():
 
 # scheduler
 scheduler = BackgroundScheduler()
-scheduler.add_job(send_daily_reminders, 'interval', minutes=5)  # کاهش فرکانس به 5 دقیقه
+scheduler.add_job(send_daily_reminders, 'interval', minutes=5)  # بررسی هر 5 دقیقه برای یادآوری روزانه
+scheduler.add_job(send_automatic_reminders, 'interval', minutes=1)  # بررسی هر دقیقه برای یادآوری خودکار
 scheduler.start()
 
 # ست وبهوک
