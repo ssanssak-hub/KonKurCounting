@@ -381,15 +381,16 @@ def check_user_subscription(chat_id: int, user_id: int):
         logger.error(f"Error checking subscription: {e}")
         return False
 
-# کیبورد اصلی
+# کیبورد اصلی با دکمه عضویت
 def main_menu():
     return {
         "keyboard": [
             [{"text": "🔎 چند روز تا کنکور؟"}],
             [{"text": "📖 برنامه‌ریزی"}],
-            [{"text": "🔔 بهم یادآوری کن!"}],
+            [{"text": "⏰ مدیریت یادآوری"}],
             [{"text": "🗑️ حذف اطلاعات"}],
             [{"text": "🔄 ریستارت ربات"}],
+            [{"text": "📢 عضویت در کانال"}],
         ],
         "resize_keyboard": True,
     }
@@ -433,9 +434,37 @@ def study_menu():
         "resize_keyboard": True,
     }
 
+# اینلاین کیبورد برای مدیریت یادآوری (مرحله اول)
+def get_reminder_main_inline_keyboard():
+    """ایجاد کیبورد اینلاین برای مدیریت یادآوری"""
+    keyboard = [
+        [{
+            "text": "⚙️ تنظیم یادآوری جدید",
+            "callback_data": "reminder_setup_new"
+        }],
+        [{
+            "text": "📋 مشاهده تنظیمات فعلی",
+            "callback_data": "reminder_view_settings"
+        }],
+        [{
+            "text": "🔕 غیرفعال کردن یادآوری",
+            "callback_data": "reminder_disable"
+        }],
+        [{
+            "text": "🗑️ حذف تنظیمات یادآوری",
+            "callback_data": "reminder_delete"
+        }],
+        [{
+            "text": "⬅️ بازگشت به منوی اصلی",
+            "callback_data": "reminder_back_main"
+        }]
+    ]
+    
+    return keyboard
+
 # اینلاین کیبورد برای مدیریت وضعیت یادآوری (مرحله اول)
 def get_status_inline_keyboard(chat_id):
-    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری (مرحله اول)"""
+    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری"""
     is_enabled = user_reminders.get(chat_id, {}).get("enabled", False)
     
     keyboard = [
@@ -616,7 +645,7 @@ def get_days_inline_keyboard(chat_id):
 
 # اینلاین کیبورد برای مدیریت وضعیت یادآوری (مرحله نهایی)
 def get_final_status_inline_keyboard(chat_id):
-    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری (مرحله نهایی)"""
+    """ایجاد کیبورد اینلاین برای مدیریت وضعیت یادآوری"""
     is_enabled = user_reminders.get(chat_id, {}).get("enabled", False)
     
     keyboard = [
@@ -702,7 +731,7 @@ def get_countdown(exam_name: str):
                 f"⏳ کنکور <b>{exam_name}</b>\n"
                 f"📅 تاریخ: {exam['date'].strftime('%d %B %Y')}\n"
                 f"🕗 ساعت شروع: {exam['time']}\n"
-                f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} دقیقه\n"
+                f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} минуقه\n"
             )
     return "\n".join(results)
 
@@ -830,18 +859,7 @@ def restart_bot_for_user(chat_id: int):
 # هندلرهای پیام‌ها
 def handle_start(chat_id: int, user_id: int):
     """مدیریت دستور شروع"""
-    # بررسی عضویت کاربر
-    if not user_subscriptions.get(chat_id, False):
-        send_message(
-            chat_id,
-            "سلام 👋 به ربات کنکور خوش آمدید!\n\n"
-            "⚠️ برای استفاده از ربات، باید در کانال ما عضو شوید:\n"
-            "https://t.me/video_amouzeshi\n\n"
-            "لطفاً ابتدا در کانال عضو شوید، سپس روی دکمه '✅ بررسی عضویت' کلیک کنید.",
-            reply_markup=get_channel_subscription_keyboard()
-        )
-    else:
-        send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
+    send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
 
 def handle_countdown(chat_id: int):
     """مدیریت نمایش زمان تا کنکور"""
@@ -850,6 +868,14 @@ def handle_countdown(chat_id: int):
 def handle_study(chat_id: int):
     """مدیریت بخش برنامه‌ریزی"""
     send_message(chat_id, "📖 بخش برنامه‌ریزی:", reply_markup=study_menu())
+
+def handle_reminder_menu(chat_id: int):
+    """مدیریت منوی یادآوری"""
+    text = "⏰ مدیریت یادآوری:\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
+    message_id = send_message(chat_id, text, {"inline_keyboard": get_reminder_main_inline_keyboard()})
+    
+    if message_id:
+        user_message_ids[chat_id] = message_id
 
 def handle_add_study(chat_id: int):
     """ثبت مطالعه"""
@@ -890,17 +916,17 @@ def handle_delete_data(chat_id: int):
     text = "⚠️ <b>حذف همه اطلاعات</b>\n\nآیا مطمئن هستید که می‌خواهید همه اطلاعات خود را حذف کنید؟\n\nاین عمل شامل تمام اطلاعات مطالعه و تنظیمات یادآوری شما می‌شود و غیرقابل بازگشت است!"
     send_message(chat_id, text, {"inline_keyboard": get_delete_confirmation_keyboard()})
 
+def handle_channel_subscription(chat_id: int):
+    """مدیریت عضویت در کانال"""
+    send_message(
+        chat_id,
+        "📢 برای عضویت در کانال آموزشی ما:\n\n"
+        "لطفاً روی دکمه زیر کلیک کرده و در کانال عضو شوید، سپس روی '✅ بررسی عضویت' کلیک کنید.",
+        reply_markup=get_channel_subscription_keyboard()
+    )
+
 # ذخیره message_id برای ویرایش پیام
 user_message_ids = {}
-
-def handle_reminder(chat_id: int):
-    """مدیریت بخش یادآوری"""
-    # ارسال پیام با کیبورد اینلاین برای وضعیت
-    text = "🔔 مدیریت یادآوری:\n\nلطفاً ابتدا وضعیت یادآوری را انتخاب کنید:"
-    message_id = send_message(chat_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
-    
-    if message_id:
-        user_message_ids[chat_id] = message_id
 
 def handle_back(chat_id: int):
     """بازگشت به منوی اصلی"""
@@ -1087,19 +1113,34 @@ def handle_subscription_check(chat_id: int, user_id: int, callback_id: int, mess
             reply_markup=get_channel_subscription_keyboard()
         )
 
+def handle_reminder_main_callback(chat_id: int, callback_data: str, message_id: int):
+    """مدیریت callback منوی اصلی یادآوری"""
+    if callback_data == "reminder_setup_new":
+        text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
+        edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
+        
+    elif callback_data == "reminder_view_settings":
+        settings_text = show_user_settings(chat_id)
+        edit_message(chat_id, message_id, settings_text, {"inline_keyboard": get_reminder_main_inline_keyboard()})
+        
+    elif callback_data == "reminder_disable":
+        if chat_id in user_reminders:
+            user_reminders[chat_id]["enabled"] = False
+            save_user_reminder(chat_id, user_reminders[chat_id])
+            edit_message(chat_id, message_id, "✅ یادآوری غیرفعال شد.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+        else:
+            edit_message(chat_id, message_id, "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+            
+    elif callback_data == "reminder_delete":
+        if chat_id in user_reminders:
+            user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
+            save_user_reminder(chat_id, user_reminders[chat_id])
+            edit_message(chat_id, message_id, "🗑️ همه تنظیمات یادآوری حذف شد.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+        else:
+            edit_message(chat_id, message_id, "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+
 # هندل پیام‌ها
 def handle_message(chat_id: int, user_id: int, text: str):
-    # بررسی عضویت کاربر
-    if not user_subscriptions.get(chat_id, False):
-        send_message(
-            chat_id,
-            "⚠️ برای استفاده از ربات، باید در کانال ما عضو شوید:\n"
-            "https://t.me/video_amouzeshi\n\n"
-            "لطفاً ابتدا در کانال عضو شوید، سپس روی دکمه '✅ بررسی عضویت' کلیک کنید.",
-            reply_markup=get_channel_subscription_keyboard()
-        )
-        return
-    
     # نگاشت دستورات به توابع مربوطه
     command_handlers = {
         "شروع": lambda: handle_start(chat_id, user_id),
@@ -1107,8 +1148,9 @@ def handle_message(chat_id: int, user_id: int, text: str):
         "🔄 ریستارت ربات": lambda: restart_bot_for_user(chat_id),
         "🔎 چند روز تا کنکور؟": lambda: handle_countdown(chat_id),
         "📖 برنامه‌ریزی": lambda: handle_study(chat_id),
-        "🔔 بهم یادآوری کن!": lambda: handle_reminder(chat_id),
+        "⏰ مدیریت یادآوری": lambda: handle_reminder_menu(chat_id),
         "🗑️ حذف اطلاعات": lambda: handle_delete_data(chat_id),
+        "📢 عضویت در کانال": lambda: handle_channel_subscription(chat_id),
         "➕ ثبت مطالعه": lambda: handle_add_study(chat_id),
         "📊 مشاهده پیشرفت": lambda: handle_view_progress(chat_id),
         "🗑️ حذف مطالعه": lambda: handle_delete_study(chat_id),
@@ -1153,6 +1195,10 @@ def handle_callback_query(chat_id: int, user_id: int, callback_data: str, callba
         
         if callback_data == "check_subscription":
             handle_subscription_check(chat_id, user_id, callback_id, message_id)
+            
+        elif callback_data.startswith("reminder_main_"):
+            action = callback_data.replace("reminder_main_", "")
+            handle_reminder_main_callback(chat_id, action, message_id)
             
         elif callback_data.startswith("reminder_status_"):
             status = callback_data.replace("reminder_status_", "")
