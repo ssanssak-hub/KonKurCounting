@@ -196,7 +196,7 @@ def save_user_study(chat_id, study_data):
         logger.error(f"Save study error: {e}")
 
 def save_user_reminder(chat_id, reminder_data):
-    """ذخیره تنظیمات یادآوری کاربر در دیتابیس"""
+    """ذخیره تنظیمات یادآوری کاربر در دیتabase"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -415,7 +415,7 @@ def get_delete_confirmation_keyboard():
 def exam_menu():
     return {
         "keyboard": [
-            [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنکور ریاضی"}],
+            [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنkور ریاضی"}],
             [{"text": "📚 کنکور انسانی"}, {"text": "🎨 کنکور هنر"}],
             [{"text": "🏫 کنکور فرهنگیان"}],
             [{"text": "⬅️ بازگشت"}],
@@ -731,7 +731,7 @@ def get_countdown(exam_name: str):
                 f"⏳ کنکور <b>{exam_name}</b>\n"
                 f"📅 تاریخ: {exam['date'].strftime('%d %B %Y')}\n"
                 f"🕗 ساعت شروع: {exam['time']}\n"
-                f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} минуقه\n"
+                f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} دقیقه\n"
             )
     return "\n".join(results)
 
@@ -1115,29 +1115,33 @@ def handle_subscription_check(chat_id: int, user_id: int, callback_id: int, mess
 
 def handle_reminder_main_callback(chat_id: int, callback_data: str, message_id: int):
     """مدیریت callback منوی اصلی یادآوری"""
-    if callback_data == "reminder_setup_new":
-        text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
-        edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
-        
-    elif callback_data == "reminder_view_settings":
-        settings_text = show_user_settings(chat_id)
-        edit_message(chat_id, message_id, settings_text, {"inline_keyboard": get_reminder_main_inline_keyboard()})
-        
-    elif callback_data == "reminder_disable":
-        if chat_id in user_reminders:
-            user_reminders[chat_id]["enabled"] = False
-            save_user_reminder(chat_id, user_reminders[chat_id])
-            edit_message(chat_id, message_id, "✅ یادآوری غیرفعال شد.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
-        else:
-            edit_message(chat_id, message_id, "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+    try:
+        if callback_data == "reminder_setup_new":
+            text = "🔔 مدیریت یادآوری:\n\nلطفاً وضعیت یادآوری را انتخاب کنید:"
+            edit_message(chat_id, message_id, text, {"inline_keyboard": get_status_inline_keyboard(chat_id)})
             
-    elif callback_data == "reminder_delete":
-        if chat_id in user_reminders:
-            user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
-            save_user_reminder(chat_id, user_reminders[chat_id])
-            edit_message(chat_id, message_id, "🗑️ همه تنظیمات یادآوری حذف شد.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
-        else:
-            edit_message(chat_id, message_id, "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+        elif callback_data == "reminder_view_settings":
+            settings_text = show_user_settings(chat_id)
+            edit_message(chat_id, message_id, settings_text, {"inline_keyboard": get_reminder_main_inline_keyboard()})
+            
+        elif callback_data == "reminder_disable":
+            if chat_id in user_reminders:
+                user_reminders[chat_id]["enabled"] = False
+                save_user_reminder(chat_id, user_reminders[chat_id])
+                edit_message(chat_id, message_id, "✅ یادآوری غیرفعال شد.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+            else:
+                edit_message(chat_id, message_id, "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+                
+        elif callback_data == "reminder_delete":
+            if chat_id in user_reminders:
+                user_reminders[chat_id] = {"enabled": False, "time": "08:00", "exams": [], "days": []}
+                save_user_reminder(chat_id, user_reminders[chat_id])
+                edit_message(chat_id, message_id, "🗑️ همه تنظیمات یادآوری حذف شد.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+            else:
+                edit_message(chat_id, message_id, "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید.", {"inline_keyboard": get_reminder_main_inline_keyboard()})
+                
+    except Exception as e:
+        logger.error(f"Error in handle_reminder_main_callback: {e}")
 
 # هندل پیام‌ها
 def handle_message(chat_id: int, user_id: int, text: str):
@@ -1196,9 +1200,8 @@ def handle_callback_query(chat_id: int, user_id: int, callback_data: str, callba
         if callback_data == "check_subscription":
             handle_subscription_check(chat_id, user_id, callback_id, message_id)
             
-        elif callback_data.startswith("reminder_main_"):
-            action = callback_data.replace("reminder_main_", "")
-            handle_reminder_main_callback(chat_id, action, message_id)
+        elif callback_data in ["reminder_setup_new", "reminder_view_settings", "reminder_disable", "reminder_delete"]:
+            handle_reminder_main_callback(chat_id, callback_data, message_id)
             
         elif callback_data.startswith("reminder_status_"):
             status = callback_data.replace("reminder_status_", "")
