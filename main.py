@@ -196,7 +196,7 @@ def save_user_study(chat_id, study_data):
         logger.error(f"Save study error: {e}")
 
 def save_user_reminder(chat_id, reminder_data):
-    """ذخیره تنظیمات یادآوری کاربر در دیتabase"""
+    """ذخیره تنظیمات یادآوری کاربر در دیتابیس"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -369,13 +369,16 @@ def get_channel_subscription_keyboard():
 def check_user_subscription(chat_id: int, user_id: int):
     """بررسی عضویت کاربر در کانال"""
     try:
-        # در اینجا باید از Telegram API برای بررسی عضویت کاربر استفاده کنید
-        # این یک پیاده‌سازی ساده است که همیشه True برمی‌گرداند
-        # برای پیاده‌سازی واقعی، باید از getChatMember استفاده کنید
+        # استفاده از Telegram API برای بررسی عضویت کاربر
+        # این پیاده‌سازی واقعی با استفاده از getChatMember
+        channel_username = "@video_amouzeshi"  # باید با یوزرنیم واقعی جایگزین شود
         
-        # برای نمونه، ما فرض می‌کنیم کاربر عضو شده است
-        # در محیط واقعی، این بخش باید با API تلگرام جایگزین شود
-        return True
+        resp = requests.get(f"{TELEGRAM_API}/getChatMember", 
+                           params={"chat_id": channel_username, "user_id": user_id})
+        resp.raise_for_status()
+        
+        member_status = resp.json().get('result', {}).get('status', 'left')
+        return member_status in ['member', 'administrator', 'creator']
         
     except Exception as e:
         logger.error(f"Error checking subscription: {e}")
@@ -415,7 +418,7 @@ def get_delete_confirmation_keyboard():
 def exam_menu():
     return {
         "keyboard": [
-            [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنkور ریاضی"}],
+            [{"text": "🧪 کنکور تجربی"}, {"text": "📐 کنکور ریاضی"}],
             [{"text": "📚 کنکور انسانی"}, {"text": "🎨 کنکور هنر"}],
             [{"text": "🏫 کنکور فرهنگیان"}],
             [{"text": "⬅️ بازگشت"}],
@@ -711,25 +714,25 @@ def send_reminder_to_user(chat_id: int):
         logger.error(f"Error in send_reminder_to_user for {chat_id}: {e}")
         return False
 
-# محاسبه تایمر
+# محاسبه تایمر (نسخه اصلاح شده)
 def get_countdown(exam_name: str):
     exams = EXAMS[exam_name]
     results = []
     for exam in exams:
-        now = datetime.now(timezone.utc)
-        exam_g = exam["date"].togregorian().replace(tzinfo=timezone.utc)
-        diff = exam_g - now
-
-        if diff.total_seconds() <= 0:
-            results.append(f"✅ کنکور {exam_name} در تاریخ {exam['date'].strftime('%Y/%m/%d')} برگزار شده!")
+        now = jdatetime.datetime.now()
+        exam_date = exam["date"]
+        
+        if exam_date < now:
+            results.append(f"✅ کنکور {exam_name} در تاریخ {exam_date.strftime('%Y/%m/%d')} برگزار شده!")
         else:
-            days, remainder = divmod(int(diff.total_seconds()), 86400)
-            hours, remainder = divmod(remainder, 3600)
-            minutes, _ = divmod(remainder, 60)
-
+            diff = exam_date - now
+            days = diff.days
+            hours = diff.seconds // 3600
+            minutes = (diff.seconds % 3600) // 60
+            
             results.append(
                 f"⏳ کنکور <b>{exam_name}</b>\n"
-                f"📅 تاریخ: {exam['date'].strftime('%d %B %Y')}\n"
+                f"📅 تاریخ: {exam_date.strftime('%d %B %Y')}\n"
                 f"🕗 ساعت شروع: {exam['time']}\n"
                 f"⌛ باقی‌مانده: {days} روز، {hours} ساعت و {minutes} دقیقه\n"
             )
@@ -737,10 +740,10 @@ def get_countdown(exam_name: str):
 
 # تابع برای گرفتن زمان ایران
 def get_iran_time():
-    """دریافت زمان فعلی ایران"""
+    """دریافت زمان فعلی ایران با فرمت یکسان"""
     try:
         iran_time = datetime.now(IRAN_TZ)
-        return iran_time.strftime("%H:%M")
+        return iran_time.strftime("%H:%M")  # همیشه با فرمت 00:00
     except Exception as e:
         logger.error(f"Error getting Iran time: {e}")
         return datetime.now().strftime("%H:%M")
@@ -1150,7 +1153,7 @@ def handle_message(chat_id: int, user_id: int, text: str):
         "شروع": lambda: handle_start(chat_id, user_id),
         "/start": lambda: handle_start(chat_id, user_id),
         "🔄 ریستارت ربات": lambda: restart_bot_for_user(chat_id),
-        "🔎 چند روز تا کنکور؟": lambda: handle_countdown(chat_id),
+        "🔎 چند روز تا کنkور؟": lambda: handle_countdown(chat_id),
         "📖 برنامه‌ریزی": lambda: handle_study(chat_id),
         "⏰ مدیریت یادآوری": lambda: handle_reminder_menu(chat_id),
         "🗑️ حذف اطلاعات": lambda: handle_delete_data(chat_id),
@@ -1323,8 +1326,8 @@ def webhook():
 
 # scheduler
 scheduler = BackgroundScheduler()
-scheduler.add_job(send_daily_reminders, 'interval', minutes=5)  # بررسی هر 5 دقیقه برای یادآوری روزانه
-scheduler.add_job(send_automatic_reminders, 'interval', minutes=1)  # بررسی هر دقیقه برای یادآوری خودکار
+scheduler.add_job(send_daily_reminders, 'interval', minutes=1)  # بررسی دقیقه‌ای برای یادآوری روزانه
+scheduler.add_job(send_automatic_reminders, 'cron', hour='8,22', minute=0)  # فقط ساعت 8 و 22 برای یادآوری خودکار
 scheduler.start()
 
 # ست وبهوک
