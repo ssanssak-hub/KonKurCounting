@@ -7,4 +7,4 @@ tzdata>=2023.3
 APScheduler>=3.10
 pytz
 apscheduler==3.10.4
-pip install python-telegram-bot
+python-telegram-bot
