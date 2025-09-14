@@ -67,6 +67,9 @@ WEEK_DAYS = {
 # مدیریت دیتابیس
 DB_FILE = "bot_data.db"
 
+# کش برای ذخیره وضعیت عضویت کاربران
+user_subscription_cache = {}
+
 def init_db():
     """ایجاد جداول دیتابیس"""
     try:
@@ -372,21 +375,36 @@ def get_channel_subscription_keyboard():
 
 # بررسی عضویت کاربر در کانال
 def check_user_subscription(chat_id: int, user_id: int) -> bool:
-    """بررسی عضویت کاربر در کانال"""
+    """بررسی عضویت کاربر در کانال با کش"""
     try:
+        # بررسی کش اولیه
+        if user_id in user_subscription_cache:
+            if time.time() - user_subscription_cache[user_id]['timestamp'] < 300:  # 5 دقیقه کش
+                return user_subscription_cache[user_id]['is_member']
+        
         # استفاده از Telegram API برای بررسی عضویت کاربر
-        # این پیاده‌سازی واقعی با استفاده از getChatMember
-        channel_username = "@video_amouzeshi"  # باید با یوزرنیم واقعی جایگزین شود
+        channel_id = "-1001908866403"  # آیدی کانال شما
         
         resp = requests.get(f"{TELEGRAM_API}/getChatMember", 
-                           params={"chat_id": channel_username, "user_id": user_id})
+                           params={"chat_id": channel_id, "user_id": user_id})
         resp.raise_for_status()
         
         member_status = resp.json().get('result', {}).get('status', 'left')
-        return member_status in ['member', 'administrator', 'creator']
+        is_member = member_status in ['member', 'administrator', 'creator']
+        
+        # ذخیره در کش
+        user_subscription_cache[user_id] = {
+            'is_member': is_member,
+            'timestamp': time.time()
+        }
+        
+        return is_member
         
     except Exception as e:
-        logger.error(f"Error checking subscription: {e}")
+        logger.error(f"Error checking subscription for user {user_id}: {e}")
+        # در صورت خطا، وضعیت قبلی را بازگردان (اگر وجود دارد)
+        if user_id in user_subscription_cache:
+            return user_subscription_cache[user_id]['is_member']
         return False
 
 # کیبورد اصلی با دکمه عضویت
@@ -461,10 +479,6 @@ def get_reminder_main_inline_keyboard():
         [{
             "text": "🗑️ حذف تنظیمات یادآوری",
             "callback_data": "reminder_delete"
-        }],
-        [{
-            "text": "⬅️ بازگشت به منوی اصلی",
-            "callback_data": "reminder_back_main"
         }]
     ]
     
@@ -487,10 +501,6 @@ def get_status_inline_keyboard(chat_id):
         [{
             "text": "⏭️ مرحله بعد (انتخاب کنکور)",
             "callback_data": "reminder_next_exams"
-        }],
-        [{
-            "text": "⬅️ بازگشت به منوی اصلی",
-            "callback_data": "reminder_back_main"
         }]
     ]
     
@@ -533,10 +543,6 @@ def get_exam_inline_keyboard(chat_id):
         [{
             "text": "⏭️ مرحله بعد (تنظیم زمان)",
             "callback_data": "reminder_next_time"
-        }],
-        [{
-            "text": "⬅️ بازگشت به وضعیت",
-            "callback_data": "reminder_back_status"
         }]
     ]
     
@@ -588,10 +594,6 @@ def get_time_inline_keyboard(chat_id):
         [{
             "text": "⏭️ مرحله بعد (انتخاب روزها)",
             "callback_data": "reminder_next_days"
-        }],
-        [{
-            "text": "⬅️ بازگشت به انتخاب کنکور",
-            "callback_data": "reminder_back_exams"
         }]
     ])
     
@@ -642,10 +644,6 @@ def get_days_inline_keyboard(chat_id):
         [{
             "text": "✅ ذخیره و تکمیل تنظیمات",
             "callback_data": "reminder_status_save"
-        }],
-        [{
-            "text": "⬅️ بازگشت به تنظیم زمان",
-            "callback_data": "reminder_back_time"
         }]
     ]
     
@@ -672,10 +670,6 @@ def get_final_status_inline_keyboard(chat_id):
         [{
             "text": "✅ ذخیره و تکمیل تنظیمات",
             "callback_data": "reminder_status_save"
-        }],
-        [{
-            "text": "⬅️ بازگشت به انتخاب روزها",
-            "callback_data": "reminder_back_days"
         }]
     ]
     
@@ -704,7 +698,7 @@ def send_reminder_to_user(chat_id: int) -> bool:
             if exam_name in EXAMS:
                 reminder_text += get_countdown(exam_name) + "\n\n"
         
-        if reminder_text == "⏰ یادآوری روزانه کنkور:\n\n":
+        if reminder_text == "⏰ یادآوری روزانه کنکور:\n\n":
             reminder_text = "⏰ امروز کنکوری برای یادآوری ندارید!"
         
         success = send_message(chat_id, reminder_text)
@@ -767,7 +761,7 @@ def send_daily_reminders():
         
         active_reminders = 0
         for chat_id, settings in user_reminders.items():
-            user_time = settings.get("time", "")
+            user_time = settings.get("time", "08:00")
             user_enabled = settings.get("enabled", False)
             user_exams = settings.get("exams", [])
             user_days = settings.get("days", [])
@@ -775,7 +769,7 @@ def send_daily_reminders():
             # بررسی آیا امروز روز انتخابی کاربر است
             today_selected = "همه روزها" in user_days or today_persian in user_days
             
-            logger.debug(f"User {chat_id}: time={user_time}, enabled={user_enabled}, exams={user_exams}, days={user_days}, today_selected={today_selected}")
+            logger.info(f"User {chat_id}: time={user_time}, enabled={user_enabled}, today_selected={today_selected}")
             
             if (user_enabled and user_time == now_iran and user_exams and today_selected):
                 logger.info(f"⏰ Sending reminder to {chat_id} at {now_iran}")
@@ -921,7 +915,7 @@ def handle_delete_study(chat_id: int):
 
 def handle_delete_data(chat_id: int):
     """مدیریت حذف اطلاعات"""
-    text = "⚠️ <b>حذف همه اطلاعات</b>\n\nآیا مطمئن هستید که می‌خواهید همه اطلاعات خود را حذف کنید؟\n\nاین عمل شامل تمام اطلاعات مطالعه و تنظیمات یادآوری شما می‌شود و غیرقachable برگشت است!"
+    text = "⚠️ <b>حذف همه اطلاعات</b>\n\nآیا مطمئن هستید که می‌خواهید همه اطلاعات خود را حذف کنید؟\n\nاین عمل شامل تمام اطلاعات مطالعه و تنظیمات یادآوری شما می‌شود و غیرقابل بازگشت است!"
     send_message(chat_id, text, {"inline_keyboard": get_delete_confirmation_keyboard()})
 
 def handle_channel_subscription(chat_id: int):
@@ -1036,7 +1030,7 @@ def handle_reminder_day_callback(chat_id: int, day_name: str, message_id: int):
     
     if day_name == "all":
         # انتخاب همه روزها
-        user_reminders[chat_id]["days"] = ["همه روزها"]
+        user_reminders[chat_id]["days"] = list(WEEK_DAYS.keys())[:-1]  # همه روزها به جز "همه روزها"
     elif day_name == "none":
         # حذف همه روزها
         user_reminders[chat_id]["days"] = []
@@ -1045,8 +1039,6 @@ def handle_reminder_day_callback(chat_id: int, day_name: str, message_id: int):
         user_reminders[chat_id]["days"].remove(day_name)
     else:
         # افزودن روز
-        if "همه روزها" in user_reminders[chat_id]["days"]:
-            user_reminders[chat_id]["days"].remove("همه روزها")
         user_reminders[chat_id]["days"].append(day_name)
     
     save_user_reminder(chat_id, user_reminders[chat_id])
@@ -1108,12 +1100,18 @@ def handle_subscription_check(chat_id: int, user_id: int, callback_id: int, mess
         user_subscriptions[chat_id] = True
         save_user_subscription(chat_id, True)
         
+        # پاکسازی کش برای این کاربر
+        if user_id in user_subscription_cache:
+            del user_subscription_cache[user_id]
+        
         # ویرایش پیام و ارسال منوی اصلی
         edit_message(chat_id, message_id, "✅ شما با موفقیت در کانال عضو شدید! اکنون می‌توانید از ربات استفاده کنید.")
         send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
     else:
         # کاربر هنوز عضو نشده
         answer_callback_query(callback_id, "❌ شما هنوز در کانال عضو نشده‌اید. لطفاً ابتدا در کانال عضو شوید.")
+        
+        # ارسال پیام جدید با کیبورد عضویت
         send_message(
             chat_id,
             "❌ شما هنوز در کانال عضو نشده‌اید.\n\n"
@@ -1352,8 +1350,13 @@ if __name__ == "__main__":
     try:
         logger.info("🤖 Bot started successfully!")
         logger.info(f"🕒 Current Iran time: {get_iran_time()}")
-        logger.info(f"👥 Total users with reminders: {len(user_reminders)}")
-        logger.info(f"👥 Total users with subscriptions: {len(user_subscriptions)}")
+        
+        # راه‌اندازی scheduler
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(send_daily_reminders, 'interval', minutes=1)
+        scheduler.add_job(send_automatic_reminders, 'cron', hour='8,22', minute=0)
+        scheduler.start()
+        logger.info("✅ Scheduler started successfully")
         
         app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
     except Exception as e:
