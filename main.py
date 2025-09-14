@@ -8,6 +8,7 @@ import sqlite3
 import atexit
 import pytz
 from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, List, Union
 from flask import Flask, request
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -68,46 +69,50 @@ DB_FILE = "bot_data.db"
 
 def init_db():
     """ایجاد جداول دیتابیس"""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    # جدول مطالعه کاربران
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS user_study (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id INTEGER NOT NULL,
-        subject TEXT NOT NULL,
-        start_time TEXT NOT NULL,
-        end_time TEXT NOT NULL,
-        duration REAL NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    # جدول یادآوری کاربران
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS user_reminders (
-        chat_id INTEGER PRIMARY KEY,
-        enabled BOOLEAN DEFAULT FALSE,
-        reminder_time TEXT DEFAULT '08:00',
-        exams TEXT DEFAULT '[]',
-        days TEXT DEFAULT '[]',
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    # جدول وضعیت عضویت کاربران
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS user_subscriptions (
-        chat_id INTEGER PRIMARY KEY,
-        subscribed BOOLEAN DEFAULT FALSE,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    logger.info("✅ Database initialized successfully")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # جدول مطالعه کاربران
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_study (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            duration REAL NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # جدول یادآوری کاربران
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_reminders (
+            chat_id INTEGER PRIMARY KEY,
+            enabled BOOLEAN DEFAULT FALSE,
+            reminder_time TEXT DEFAULT '08:00',
+            exams TEXT DEFAULT '[]',
+            days TEXT DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # جدول وضعیت عضویت کاربران
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_subscriptions (
+            chat_id INTEGER PRIMARY KEY,
+            subscribed BOOLEAN DEFAULT FALSE,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        conn.commit()
+        logger.info("✅ Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization error: {e}")
+    finally:
+        conn.close()
 
 @contextmanager
 def get_db_connection():
@@ -298,7 +303,7 @@ load_user_data()
 atexit.register(lambda: logger.info("🤖 Bot shutting down..."))
 
 # ارسال پیام
-def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
+def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -> Optional[int]:
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
@@ -315,7 +320,7 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
         return None
 
 # ویرایش پیام
-def edit_message(chat_id: int, message_id: int, text: str, reply_markup: dict | None = None):
+def edit_message(chat_id: int, message_id: int, text: str, reply_markup: Optional[Dict] = None) -> bool:
     payload = {
         "chat_id": chat_id,
         "message_id": message_id,
@@ -366,7 +371,7 @@ def get_channel_subscription_keyboard():
     return {"inline_keyboard": keyboard}
 
 # بررسی عضویت کاربر در کانال
-def check_user_subscription(chat_id: int, user_id: int):
+def check_user_subscription(chat_id: int, user_id: int) -> bool:
     """بررسی عضویت کاربر در کانال"""
     try:
         # استفاده از Telegram API برای بررسی عضویت کاربر
@@ -677,7 +682,7 @@ def get_final_status_inline_keyboard(chat_id):
     return keyboard
 
 # ارسال یادآوری به کاربر
-def send_reminder_to_user(chat_id: int):
+def send_reminder_to_user(chat_id: int) -> bool:
     """ارسال یادآوری کنکور به کاربر خاص"""
     try:
         if chat_id not in user_reminders:
@@ -699,7 +704,7 @@ def send_reminder_to_user(chat_id: int):
             if exam_name in EXAMS:
                 reminder_text += get_countdown(exam_name) + "\n\n"
         
-        if reminder_text == "⏰ یادآوری روزانه کنکور:\n\n":
+        if reminder_text == "⏰ یادآوری روزانه کنkور:\n\n":
             reminder_text = "⏰ امروز کنکوری برای یادآوری ندارید!"
         
         success = send_message(chat_id, reminder_text)
@@ -715,7 +720,7 @@ def send_reminder_to_user(chat_id: int):
         return False
 
 # محاسبه تایمر (نسخه اصلاح شده)
-def get_countdown(exam_name: str):
+def get_countdown(exam_name: str) -> str:
     exams = EXAMS[exam_name]
     results = []
     for exam in exams:
@@ -739,7 +744,7 @@ def get_countdown(exam_name: str):
     return "\n".join(results)
 
 # تابع برای گرفتن زمان ایران
-def get_iran_time():
+def get_iran_time() -> str:
     """دریافت زمان فعلی ایران با فرمت یکسان"""
     try:
         iran_time = datetime.now(IRAN_TZ)
@@ -817,7 +822,7 @@ def send_automatic_reminders():
         logger.error(f"Automatic reminder scheduler error: {e}")
 
 # نمایش تنظیمات کاربر
-def show_user_settings(chat_id: int):
+def show_user_settings(chat_id: int) -> str:
     """نمایش تنظیمات کاربر"""
     if chat_id not in user_reminders:
         return "🔕 شما هنوز سیستم یادآوری را فعال نکرده‌اید."
@@ -916,7 +921,7 @@ def handle_delete_study(chat_id: int):
 
 def handle_delete_data(chat_id: int):
     """مدیریت حذف اطلاعات"""
-    text = "⚠️ <b>حذف همه اطلاعات</b>\n\nآیا مطمئن هستید که می‌خواهید همه اطلاعات خود را حذف کنید؟\n\nاین عمل شامل تمام اطلاعات مطالعه و تنظیمات یادآوری شما می‌شود و غیرقابل بازگشت است!"
+    text = "⚠️ <b>حذف همه اطلاعات</b>\n\nآیا مطمئن هستید که می‌خواهید همه اطلاعات خود را حذف کنید؟\n\nاین عمل شامل تمام اطلاعات مطالعه و تنظیمات یادآوری شما می‌شود و غیرقachable برگشت است!"
     send_message(chat_id, text, {"inline_keyboard": get_delete_confirmation_keyboard()})
 
 def handle_channel_subscription(chat_id: int):
@@ -1153,7 +1158,7 @@ def handle_message(chat_id: int, user_id: int, text: str):
         "شروع": lambda: handle_start(chat_id, user_id),
         "/start": lambda: handle_start(chat_id, user_id),
         "🔄 ریستارت ربات": lambda: restart_bot_for_user(chat_id),
-        "🔎 چند روز تا کنkور؟": lambda: handle_countdown(chat_id),
+        "🔎 چند روز تا کنکور؟": lambda: handle_countdown(chat_id),
         "📖 برنامه‌ریزی": lambda: handle_study(chat_id),
         "⏰ مدیریت یادآوری": lambda: handle_reminder_menu(chat_id),
         "🗑️ حذف اطلاعات": lambda: handle_delete_data(chat_id),
