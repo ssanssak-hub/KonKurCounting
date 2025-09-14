@@ -7,6 +7,7 @@ import requests
 import sqlite3
 import atexit
 import pytz
+import re
 from datetime import datetime
 from typing import Optional, Dict
 from flask import Flask, request
@@ -54,6 +55,24 @@ IRAN_TZ = pytz.timezone('Asia/Tehran')
 
 # مدیریت دیتابیس
 DB_FILE = "bot_data.db"
+
+# مدیریت حالت کاربران
+user_states = {}
+
+class UserState:
+    NORMAL = "normal"
+    WAITING_EXAM = "waiting_exam"
+    WAITING_TIME = "waiting_time"
+
+def set_user_state(chat_id, state, data=None):
+    user_states[chat_id] = {"state": state, "data": data}
+
+def get_user_state(chat_id):
+    return user_states.get(chat_id, {"state": UserState.NORMAL, "data": None})
+
+def clear_user_state(chat_id):
+    if chat_id in user_states:
+        del user_states[chat_id]
 
 def init_db():
     try:
@@ -141,6 +160,7 @@ def main_menu():
             [{"text": "📖 برنامه‌ریزی"}],
             [{"text": "⏰ تنظیم یادآوری"}],
             [{"text": "❌ حذف یادآوری"}],
+            [{"text": "❌ لغو عملیات"}],
             [{"text": "🗑️ حذف اطلاعات"}],
             [{"text": "🔄 ریستارت ربات"}],
             [{"text": "📢 عضویت در کانال"}],
@@ -159,6 +179,18 @@ def exam_menu():
         ],
         "resize_keyboard": True,
     }
+
+# اعتبارسنجی زمان
+def is_valid_time(time_str):
+    """اعتبارسنجی کامل فرمت زمان"""
+    try:
+        if not re.match(r'^\d{1,2}:\d{2}$', time_str):
+            return False
+        
+        hours, minutes = map(int, time_str.split(':'))
+        return 0 <= hours <= 23 and 0 <= minutes <= 59
+    except:
+        return False
 
 # ذخیره یادآوری
 def save_reminder(chat_id, exam, time_str):
@@ -201,60 +233,82 @@ def send_reminders():
         logger.error(f"send_reminders error: {e}")
 
 # هندل پیام‌ها
-waiting_exam = {}
-waiting_time = {}
-
 def handle_message(chat_id: int, user_id: int, text: str):
-    global waiting_exam, waiting_time
+    try:
+        logger.info(f"Received message from {chat_id}: {text}")
+        
+        state = get_user_state(chat_id)
+        
+        if text in ["شروع", "/start"]:
+            clear_user_state(chat_id)
+            send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
+            return
 
-    if chat_id in waiting_exam:
-        exam = text.replace("کنکور ", "").strip()
-        if exam in EXAMS:
-            waiting_time[chat_id] = exam
-            del waiting_exam[chat_id]
-            send_message(chat_id, "⏰ لطفاً ساعت یادآوری را وارد کنید (مثال: 14:30):")
+        if text == "❌ لغو عملیات":
+            clear_user_state(chat_id)
+            send_message(chat_id, "✅ عملیات کنونی لغو شد.", reply_markup=main_menu())
+            return
+
+        if state["state"] == UserState.WAITING_EXAM:
+            exam = text.replace("کنکور ", "").strip()
+            if exam in EXAMS:
+                set_user_state(chat_id, UserState.WAITING_TIME, exam)
+                send_message(chat_id, "⏰ لطفاً ساعت یادآوری را به فرمت HH:MM وارد کنید (مثال: 14:30):")
+            else:
+                send_message(chat_id, "❌ لطفاً یک کنکور معتبر انتخاب کنید.", reply_markup=exam_menu())
+            return
+
+        if state["state"] == UserState.WAITING_TIME:
+            time_input = text.strip()
+            if is_valid_time(time_input):
+                exam = state["data"]
+                save_reminder(chat_id, exam, time_input)
+                clear_user_state(chat_id)
+                send_message(chat_id, f"✅ یادآوری برای کنکور {exam} در ساعت {time_input} تنظیم شد.", reply_markup=main_menu())
+            else:
+                send_message(chat_id, "❌ فرمت زمان نامعتبر است. لطفاً زمان را به فرمت HH:MM وارد کنید (مثال: 14:30):")
+            return
+
+        if text == "🔎 چند روز تا کنکور؟":
+            send_message(chat_id, "یک کنکور رو انتخاب کن:", reply_markup=exam_menu())
+        elif text in ["🧪 کنکور تجربی", "📐 کنکور ریاضی", "📚 کنکور انسانی", "🎨 کنکور هنر", "🏫 کنکور فرهنگیان"]:
+            exam = text.replace("کنکور ", "").strip()
+            send_message(chat_id, get_countdown(exam))
+        elif text == "⏰ تنظیم یادآوری":
+            set_user_state(chat_id, UserState.WAITING_EXAM)
+            send_message(chat_id, "📚 لطفاً یک کنکور رو انتخاب کن:", reply_markup=exam_menu())
+        elif text == "❌ حذف یادآوری":
+            delete_reminder(chat_id)
+            send_message(chat_id, "✅ یادآوری شما حذف شد.", reply_markup=main_menu())
+        elif text == "⬅️ بازگشت":
+            clear_user_state(chat_id)
+            send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
         else:
-            send_message(chat_id, "❌ لطفاً یک کنکور معتبر انتخاب کنید.", reply_markup=exam_menu())
-        return
-
-    if chat_id in waiting_time:
-        exam = waiting_time[chat_id]
-        save_reminder(chat_id, exam, text.strip())
-        del waiting_time[chat_id]
-        send_message(chat_id, f"✅ یادآوری برای کنکور {exam} در ساعت {text.strip()} تنظیم شد.", reply_markup=main_menu())
-        return
-
-    if text in ["شروع", "/start"]:
-        send_message(chat_id, "سلام 👋 یک گزینه رو انتخاب کن:", reply_markup=main_menu())
-    elif text == "🔎 چند روز تا کنکور؟":
-        send_message(chat_id, "یک کنکور رو انتخاب کن:", reply_markup=exam_menu())
-    elif text in ["🧪 کنکور تجربی", "📐 کنکور ریاضی", "📚 کنکور انسانی", "🎨 کنکور هنر", "🏫 کنکور فرهنگیان"]:
-        exam = text.replace("کنکور ", "").strip()
-        send_message(chat_id, get_countdown(exam))
-    elif text == "⏰ تنظیم یادآوری":
-        waiting_exam[chat_id] = True
-        send_message(chat_id, "📚 لطفاً یک کنکور رو انتخاب کن:", reply_markup=exam_menu())
-    elif text == "❌ حذف یادآوری":
-        delete_reminder(chat_id)
-        send_message(chat_id, "✅ یادآوری شما حذف شد.", reply_markup=main_menu())
-    elif text == "⬅️ بازگشت":
-        send_message(chat_id, "↩️ بازگشتی به منوی اصلی:", reply_markup=main_menu())
-    else:
-        send_message(chat_id, "❌ دستور نامعتبر است. لطفاً از منو استفاده کنید.", reply_markup=main_menu())
+            send_message(chat_id, "❌ دستور نامعتبر است. لطفاً از منو استفاده کنید.", reply_markup=main_menu())
+            
+    except Exception as e:
+        logger.error(f"Error handling message from {chat_id}: {e}")
+        send_message(chat_id, "❌ خطایی در پردازش درخواست شما رخ داد. لطفاً دوباره تلاش کنید.")
 
 # وب‌هوک
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json()
-        if not data:
+        # بررسی وجود داده‌های ضروری
+        if not request.json or 'message' not in request.json:
             return "ok"
-
-        if "message" in data and "text" in data["message"]:
-            chat_id = data["message"]["chat"]["id"]
-            user_id = data["message"]["from"]["id"]
-            text = data["message"]["text"]
-            handle_message(chat_id, user_id, text)
+            
+        data = request.json
+        message = data['message']
+        
+        if 'text' not in message or 'chat' not in message or 'from' not in message:
+            return "ok"
+            
+        chat_id = message["chat"]["id"]
+        user_id = message["from"]["id"]
+        text = message["text"]
+        
+        handle_message(chat_id, user_id, text)
     except Exception as e:
         logger.error(f"webhook error: {e}")
     return "ok"
