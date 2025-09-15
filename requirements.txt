@@ -1,5 +1,5 @@
-pip install aiogram 
-jdatetime 
-pytz 
-aiosqlite 
+aiogram
+jdatetime
+pytz
+aiosqlite
 apscheduler
